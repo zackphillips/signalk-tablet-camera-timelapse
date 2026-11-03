@@ -13,6 +13,7 @@ const fs = require('fs')
 const fsp = fs.promises
 const path = require('path')
 const { NetworkError, AuthError } = require('../errors')
+const { atomicWrite } = require('../storage')
 
 const SCOPE = 'https://www.googleapis.com/auth/drive.file'
 const DEVICE_CODE_URL = 'https://oauth2.googleapis.com/device/code'
@@ -73,11 +74,11 @@ class DriveAuth {
     }
   }
 
-  async save () {
-    const tmp = this.tokenPath + '.tmp'
-    await fsp.writeFile(tmp, JSON.stringify(this.token), { mode: 0o600 })
-    await fsp.chmod(tmp, 0o600)
-    await fsp.rename(tmp, this.tokenPath)
+  /** Serialized, fsynced, created 0600 before any token bytes are written. */
+  save () {
+    const write = () => atomicWrite(this.tokenPath, JSON.stringify(this.token), { mode: 0o600 })
+    this.saving = (this.saving || Promise.resolve()).then(write, write)
+    return this.saving
   }
 
   /** unconfigured | unauthorized | pending | authorized | needs_auth */

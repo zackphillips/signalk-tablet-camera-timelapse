@@ -93,3 +93,10 @@ test('evaluator: seed keeps an active session across reload', () => {
   e.seed(true, 0)
   assert.strictEqual(e.update('sailing', 1000).active, true)
 })
+
+test('evaluator: a seeded old timestamp goes stale on schedule, not a full window later', () => {
+  const e = Auto.createEvaluator({ ...base, autoDebounceSeconds: 0 })
+  e.update('sailing', 0) // value last seen at t=0
+  assert.strictEqual(e.evaluate(119000).active, true)
+  assert.strictEqual(e.evaluate(121000).reason, 'stale')
+})

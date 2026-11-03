@@ -13,7 +13,8 @@
 
 const fs = require('fs')
 const fsp = fs.promises
-const { NetworkError, RateLimitError, AuthError, HttpError } = require('../errors')
+const { NetworkError, RateLimitError, AuthError, HttpError, DriveFullError } = require('../errors')
+const { atomicWrite } = require('../storage')
 
 const API = 'https://www.googleapis.com/drive/v3'
 const UPLOAD_API = 'https://www.googleapis.com/upload/drive/v3'
@@ -51,11 +52,7 @@ class DriveTarget {
   }
 
   saveCache () {
-    const write = async () => {
-      const tmp = this.folderCachePath + '.tmp'
-      await fsp.writeFile(tmp, JSON.stringify(this.cache, null, 2))
-      await fsp.rename(tmp, this.folderCachePath)
-    }
+    const write = () => atomicWrite(this.folderCachePath, JSON.stringify(this.cache, null, 2))
     this.saving = (this.saving || Promise.resolve()).then(write, write)
     return this.saving
   }
@@ -88,7 +85,10 @@ class DriveTarget {
     if (res.status >= 500) throw new NetworkError(`Drive returned ${res.status}`)
     if (res.status === 403) {
       const body = await res.text().catch(() => '')
-      if (/rateLimitExceeded|userRateLimitExceeded|quotaExceeded/i.test(body)) {
+      if (/storageQuotaExceeded/.test(body)) {
+        throw new DriveFullError('Google Drive storage is full')
+      }
+      if (/"(rateLimitExceeded|userRateLimitExceeded)"/.test(body)) {
         throw new RateLimitError('Drive rate limit (403)', parseRetryAfter(res))
       }
       throw new HttpError(`Drive returned 403: ${body.slice(0, 300)}`, 403, body)

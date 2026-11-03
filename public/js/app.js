@@ -175,6 +175,8 @@
     if (!MODES.includes(mode)) return
     if (mode === 'auto' && !autoConfigured()) mode = 'off'
     const prev = S.mode
+    // A deliberate mode change by the user always starts a fresh session.
+    if (mode !== prev) prefs.set('session', null)
     S.mode = mode
     render()
     if (!local) {
@@ -249,7 +251,15 @@
     return S.track ? (S.track.getSettings().deviceId || S.track.label) : 'default'
   }
 
-  async function openStream () {
+  let opening = null
+  /** Single-flight: concurrent callers share one getUserMedia call. */
+  function openStream () {
+    if (S.stream) return Promise.resolve(true)
+    if (!opening) opening = doOpenStream().finally(() => { opening = null })
+    return opening
+  }
+
+  async function doOpenStream () {
     if (S.stream) return true
     if (!window.isSecureContext || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
       S.cameraError = 'insecure'
@@ -279,7 +289,7 @@
     } catch (e) {
       if (deviceId && (e.name === 'OverconstrainedError' || e.name === 'NotFoundError')) {
         prefs.set('cameraId', null) // camera vanished; fall back to rear
-        return openStream()
+        return doOpenStream()
       }
       S.cameraError = e.name === 'NotAllowedError' ? 'denied' : (e.message || e.name)
       render()
@@ -450,7 +460,7 @@
     return { ...f, method: 'canvas' }
   }
 
-  async function uploadFrame (frame) {
+  async function uploadFrame (frame, retries = UPLOAD_RETRIES) {
     const q = new URLSearchParams({
       ts: frame.ts,
       session: frame.session,
@@ -460,7 +470,7 @@
       h: frame.h || ''
     })
     let lastErr
-    for (let i = 0; i < UPLOAD_RETRIES; i++) {
+    for (let i = 0; i < retries; i++) {
       try {
         const res = await fetch(`${API}/frames?${q}`, {
           method: 'POST',
@@ -481,21 +491,32 @@
           err.status = res.status
           throw err
         }
-        if (!res.ok) throw new Error((body && body.error) || `HTTP ${res.status}`)
+        if (!res.ok) {
+          const err = new Error((body && body.error) || `HTTP ${res.status}`)
+          err.status = res.status
+          // 4xx other than timeout/rate limit will fail the same way again.
+          err.permanent = res.status >= 400 && res.status < 500 && res.status !== 408 && res.status !== 429
+          throw err
+        }
         return body
       } catch (e) {
         lastErr = e
-        if (e.status === 507 || e.status === 401 || e.status === 403) throw e
-        await sleep(1000 * Math.pow(2, i))
+        if (e.status === 507 || e.status === 401 || e.status === 403 || e.permanent) throw e
+        if (i < retries - 1) await sleep(1000 * Math.pow(2, i))
       }
     }
     throw lastErr
   }
 
+  /** Replay buffered frames once each. Stops at the first transient failure. */
   async function flushBuffer () {
     while (S.buffer.length) {
-      const f = S.buffer[0]
-      await uploadFrame(f)
+      try {
+        await uploadFrame(S.buffer[0], 1)
+      } catch (e) {
+        if (e.permanent) { S.buffer.shift(); log('dropped buffered frame:', e.message); continue }
+        throw e
+      }
       S.buffer.shift()
     }
   }
@@ -509,7 +530,6 @@
     }
     S.busy = true
     try {
-      if (S.buffer.length) await flushBuffer()
       const ts = new Date().toISOString()
       const f = await takeFrame()
       const frame = { ...f, ts, session: S.sessionId, mode: S.mode, device: S.track ? S.track.label : '' }
@@ -526,9 +546,19 @@
         S.uploadError = e.message
         if (e.status === 507) {
           refreshStatus()
+        } else if (e.permanent) {
+          log('frame rejected by server:', e.message)
         } else if (e.status !== 401 && e.status !== 403) {
           S.buffer.push(frame)
           if (S.buffer.length > BUFFER_MAX) S.buffer.shift()
+        }
+      }
+      // Only replay older frames once the server is accepting new ones again.
+      if (S.buffer.length && !S.uploadError) {
+        try {
+          await flushBuffer()
+        } catch (e) {
+          S.uploadError = `${S.buffer.length} buffered frame(s) waiting: ${e.message}`
         }
       }
     } catch (e) {
@@ -579,7 +609,7 @@
     } else if (!wants && S.sessionId) {
       log('session end', S.sessionId, S.sessionFrames, 'frames')
       S.sessionId = null
-      prefs.set('session', null)
+      // Keep prefs.session so a brief Auto dropout resumes the same folder.
     }
 
     if (wantStream() && document.visibilityState === 'visible') {

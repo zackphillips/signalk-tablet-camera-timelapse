@@ -85,9 +85,9 @@ function buildSchema (webapps) {
       autoStaleSeconds: {
         type: 'number',
         title: 'Auto: stale after (s)',
-        description: 'No update within this window makes the condition false. 0 disables the check; use 0 for paths that only publish on change, such as navigation.state from most sources.',
+        description: 'No update within this window makes the condition false. 0 (default) disables the check, which suits paths that only publish on change, such as navigation.state. Set e.g. 120 for continuously updated paths.',
         minimum: 0,
-        default: 120
+        default: 0
       },
       autoDebounceSeconds: { type: 'number', title: 'Auto: debounce (s)', minimum: 0, default: 30 },
       storagePath: { type: 'string', title: 'Storage path', description: 'Empty = <plugin data dir>/frames' },
@@ -142,7 +142,7 @@ const DEFAULTS = {
   autoOperator: 'equals',
   autoValue: 'sailing',
   autoCaseSensitive: false,
-  autoStaleSeconds: 120,
+  autoStaleSeconds: 0,
   autoDebounceSeconds: 30,
   storagePath: '',
   minFreeDiskMB: 500,

@@ -59,15 +59,20 @@ test('scanQueue orders oldest first across sessions, jpg before json', async () 
   assert.strictEqual(s.stats.queueCount, 5)
 })
 
-test('same-millisecond frames do not overwrite each other', async () => {
+test('a retried frame (same session + timestamp) is stored once', async () => {
   const d = tmpdir()
-  const s = new Storage({ storagePath: d })
+  const s = new Storage({ storagePath: d, minFreeDiskMB: 0 })
   await s.init()
   const t = new Date('2026-01-01T00:00:00Z')
   const a = await s.writeFrame({ sessionId: 's', captureDate: t, jpeg: JPEG })
   const b = await s.writeFrame({ sessionId: 's', captureDate: t, jpeg: JPEG })
-  assert.notStrictEqual(a.base, b.base)
-  assert.strictEqual((await s.scanQueue()).length, 2)
+  assert.strictEqual(a.duplicate, false)
+  assert.strictEqual(b.duplicate, true)
+  assert.strictEqual((await s.scanQueue()).length, 1)
+  // still a duplicate after it was uploaded and moved
+  await s.afterUpload((await s.scanQueue())[0])
+  assert.strictEqual((await s.writeFrame({ sessionId: 's', captureDate: t, jpeg: JPEG })).duplicate, true)
+  assert.strictEqual((await s.scanQueue()).length, 0)
 })
 
 for (const mode of ['delete', 'move', 'keep']) {
@@ -110,23 +115,37 @@ test('pruneUploaded deletes only files older than keepUploadedDays, move mode on
   }
 })
 
-test('cache cap: blocks ingest when full, evicts uploaded files first', async () => {
+function bigJpeg () {
+  const b = Buffer.alloc(400 * 1024, 1)
+  b[0] = 0xff; b[1] = 0xd8
+  return b
+}
+
+test('cache cap, move mode: only queued bytes block; uploaded files are evicted', async () => {
   const d = tmpdir()
   const s = new Storage({ storagePath: d, afterUpload: 'move', maxCacheMB: 1, minFreeDiskMB: 0 })
   await s.init()
-  const big = Buffer.alloc(400 * 1024, 1)
-  big[0] = 0xff; big[1] = 0xd8
-  for (let i = 0; i < 3; i++) await s.writeFrame({ sessionId: 's', captureDate: new Date(Date.UTC(2026, 0, 1, 0, 0, i)), jpeg: big })
-  assert.strictEqual(s.ingestBlocker(), 'cache_full')
-  // Upload two; still full because uploaded files count toward the cap.
+  for (let i = 0; i < 3; i++) await s.writeFrame({ sessionId: 's', captureDate: new Date(Date.UTC(2026, 0, 1, 0, 0, i)), jpeg: bigJpeg() })
+  assert.strictEqual(s.ingestBlocker(), 'cache_full', 'queued frames alone fill the cap')
   const items = await s.scanQueue()
   await s.afterUpload(items[0])
   await s.afterUpload(items[1])
+  assert.strictEqual(s.ingestBlocker(), null, 'uploaded files never block ingest in move mode')
+  // the next write triggers eviction in the background
+  await s.writeFrame({ sessionId: 's', captureDate: new Date(Date.UTC(2026, 0, 1, 0, 0, 9)), jpeg: bigJpeg() })
+  await s.evicting
+  assert.ok(s.cacheBytes() < 1024 * 1024 * 0.95)
+  assert.strictEqual((await s.scanQueue()).length, 2, 'queued frames are never evicted')
+})
+
+test('cache cap, keep mode: uploaded files count and are never evicted', async () => {
+  const d = tmpdir()
+  const s = new Storage({ storagePath: d, afterUpload: 'keep', maxCacheMB: 1, minFreeDiskMB: 0 })
+  await s.init()
+  for (let i = 0; i < 3; i++) await s.writeFrame({ sessionId: 's', captureDate: new Date(Date.UTC(2026, 0, 1, 0, 0, i)), jpeg: bigJpeg() })
+  for (const it of await s.scanQueue()) await s.afterUpload(it)
   assert.strictEqual(s.ingestBlocker(), 'cache_full')
-  const evicted = await s.evictForCap()
-  assert.ok(evicted >= 1)
-  assert.strictEqual(s.ingestBlocker(), null)
-  assert.strictEqual((await s.scanQueue()).length, 1, 'queued frames are never evicted')
+  assert.strictEqual(await s.evictForCap(), 0)
 })
 
 test('disk low blocks ingest', async () => {

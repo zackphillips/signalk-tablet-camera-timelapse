@@ -18,10 +18,10 @@ function frameBaseName (date) {
 }
 
 /** Write a file atomically: temp file in the same dir, fsync, rename. */
-async function atomicWrite (file, data) {
+async function atomicWrite (file, data, { mode } = {}) {
   const dir = path.dirname(file)
   const tmp = path.join(dir, `.tmp-${process.pid}-${crypto.randomBytes(6).toString('hex')}`)
-  const fh = await fsp.open(tmp, 'w')
+  const fh = await fsp.open(tmp, 'w', mode)
   try {
     await fh.writeFile(data)
     await fh.sync()
@@ -108,28 +108,43 @@ class Storage {
     return this.stats.queueBytes + this.stats.uploadedBytes
   }
 
-  /** Why new frames would be rejected right now, or null. */
+  /**
+   * Why new frames would be rejected right now, or null. In move mode,
+   * uploaded files are evictable, so only queued bytes count against the cap.
+   */
   ingestBlocker () {
     const free = this.freeBytes()
     if (free !== null && free < this.minFreeBytes) return 'disk_low'
-    if (this.maxCacheBytes > 0 && this.cacheBytes() >= this.maxCacheBytes) return 'cache_full'
+    if (this.maxCacheBytes > 0) {
+      const used = this.afterUploadMode === 'move' ? this.stats.queueBytes : this.cacheBytes()
+      if (used >= this.maxCacheBytes) return 'cache_full'
+    }
     return null
+  }
+
+  /** Start an eviction pass if the cache is near the cap. Never runs twice at once. */
+  maybeEvict () {
+    if (this.evicting || this.afterUploadMode !== 'move' || this.maxCacheBytes <= 0) return
+    if (this.cacheBytes() < this.maxCacheBytes * 0.95) return
+    this.evicting = this.evictForCap()
+      .catch(e => this.log.error(`eviction failed: ${e.message}`))
+      .finally(() => { this.evicting = null })
   }
 
   /**
    * Write one frame (jpg plus optional sidecar) into queue/<session>/.
-   * Returns { base, jpgPath }.
+   * Session + capture timestamp identifies a frame, so a client retry of a
+   * frame the server already stored is a no-op (duplicate: true).
+   * Returns { base, jpgPath, duplicate }.
    */
   async writeFrame ({ sessionId, captureDate, jpeg, sidecar }) {
     if (!isValidSessionId(sessionId)) throw new Error('invalid session id')
     const dir = path.join(this.queueDir, sessionId)
     await fsp.mkdir(dir, { recursive: true })
-    let base = frameBaseName(captureDate)
-    // Guard against two frames with the same millisecond (e.g. two tablets).
-    for (let i = 1; fs.existsSync(path.join(dir, base + '.jpg')); i++) {
-      base = `${frameBaseName(captureDate)}_${i}`
-    }
+    const base = frameBaseName(captureDate)
     const jpgPath = path.join(dir, base + '.jpg')
+    const uploadedPath = path.join(this.uploadedDir, sessionId, base + '.jpg')
+    if (fs.existsSync(jpgPath) || fs.existsSync(uploadedPath)) return { base, jpgPath, duplicate: true }
     await atomicWrite(jpgPath, jpeg)
     let bytes = jpeg.length
     let count = 1
@@ -141,7 +156,8 @@ class Storage {
     }
     this.stats.queueBytes += bytes
     this.stats.queueCount += count
-    return { base, jpgPath }
+    this.maybeEvict()
+    return { base, jpgPath, duplicate: false }
   }
 
   async scanDir (base) {

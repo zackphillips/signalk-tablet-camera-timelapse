@@ -4,7 +4,7 @@ const fs = require('fs')
 const fsp = fs.promises
 const path = require('path')
 const { buildSchema, scanWebapps, withDefaults, SELF } = require('./schema')
-const { Storage, isValidSessionId } = require('./storage')
+const { Storage, isValidSessionId, atomicWrite } = require('./storage')
 const { DriveAuth } = require('./drive/oauth')
 const { DriveTarget } = require('./drive/target')
 const { Uploader } = require('./uploader')
@@ -19,18 +19,17 @@ const DELTA_PREFIX = 'plugins.tabletCameraTimelapse'
 function readBody (req, limit) {
   if (Buffer.isBuffer(req.body)) return Promise.resolve(req.body)
   return new Promise((resolve, reject) => {
-    const chunks = []
+    let chunks = []
     let size = 0
     req.on('data', c => {
       size += c.length
-      if (size > limit) {
-        reject(Object.assign(new Error('frame too large'), { status: 413 }))
-        req.destroy()
-        return
-      }
-      chunks.push(c)
+      if (size > limit) { chunks = null; return } // keep draining so the 413 response reaches the client
+      if (chunks) chunks.push(c)
     })
-    req.on('end', () => resolve(Buffer.concat(chunks)))
+    req.on('end', () => {
+      if (!chunks) reject(Object.assign(new Error('frame too large'), { status: 413 }))
+      else resolve(Buffer.concat(chunks))
+    })
     req.on('error', reject)
   })
 }
@@ -89,7 +88,7 @@ module.exports = function (app) {
 
   async function saveMode () {
     try {
-      await fsp.writeFile(modeFile(), JSON.stringify({ mode: state.mode, at: state.modeChangedAt }))
+      await atomicWrite(modeFile(), JSON.stringify({ mode: state.mode, at: state.modeChangedAt }))
     } catch (e) { recordError(`saving mode: ${e.message}`) }
   }
 
@@ -127,7 +126,8 @@ module.exports = function (app) {
       if (v && v.value !== undefined) {
         const ts = v.timestamp ? Date.parse(v.timestamp) : NaN
         const staleMs = (Number(cfg.autoStaleSeconds) || 0) * 1000
-        if (!staleMs || !Number.isFinite(ts) || Date.now() - ts < staleMs) evaluator.update(v.value)
+        const seenAt = Number.isFinite(ts) && ts <= Date.now() ? ts : Date.now()
+        if (!staleMs || Date.now() - seenAt < staleMs) evaluator.update(v.value, seenAt)
       }
     } catch (e) { /* no data */ }
     try {
@@ -423,7 +423,10 @@ module.exports = function (app) {
         nav
       })
       try {
-        const { base } = await storage.writeFrame({ sessionId, captureDate, jpeg, sidecar })
+        const { base, duplicate } = await storage.writeFrame({ sessionId, captureDate, jpeg, sidecar })
+        if (duplicate) {
+          return res.status(200).json({ ok: true, duplicate: true, file: `${sessionId}/${base}.jpg`, queueCount: storage.stats.queueCount })
+        }
         if (sessionId !== 'test-shots') {
           state.lastFrameAt = Date.now()
           state.sessionId = sessionId

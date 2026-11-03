@@ -9,9 +9,9 @@
  */
 
 const fs = require('fs')
-const fsp = fs.promises
 const path = require('path')
-const { NetworkError, RateLimitError, AuthError, HttpError } = require('./errors')
+const { NetworkError, RateLimitError, AuthError, HttpError, DriveFullError } = require('./errors')
+const { atomicWrite } = require('./storage')
 
 const MAX_BACKOFF_MS = 15 * 60 * 1000
 
@@ -31,11 +31,7 @@ class InflightLog {
   async remove (k) { this.set.delete(k); await this.save() }
   /** Writes are chained so parallel uploads never race on the temp file. */
   save () {
-    const write = async () => {
-      const tmp = this.file + '.tmp'
-      await fsp.writeFile(tmp, JSON.stringify([...this.set]))
-      await fsp.rename(tmp, this.file)
-    }
+    const write = () => atomicWrite(this.file, JSON.stringify([...this.set]))
     this.saving = (this.saving || Promise.resolve()).then(write, write)
     return this.saving
   }
@@ -164,7 +160,7 @@ class Uploader {
             this.lastUploadAt = this.now()
             this.uploadedTotal++
           } catch (e) {
-            if (e instanceof NetworkError || e instanceof RateLimitError || e instanceof AuthError) {
+            if (e instanceof NetworkError || e instanceof RateLimitError || e instanceof AuthError || e instanceof DriveFullError) {
               fatal = fatal || e
             } else {
               counts.failed++
@@ -192,6 +188,10 @@ class Uploader {
       delay = Math.max(fatal.retryAfterMs || 0, this.backoffMs(true))
     } else if (fatal instanceof AuthError) {
       this.state = 'needs_auth'
+    } else if (fatal instanceof DriveFullError) {
+      this.failures++
+      this.state = 'drive_full'
+      delay = MAX_BACKOFF_MS
     } else if (fatal) {
       this.failures++
       this.state = 'error'

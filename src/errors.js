@@ -12,9 +12,13 @@ class RateLimitError extends Error {
 class AuthError extends Error {
   constructor (msg) { super(msg); this.name = 'AuthError' }
 }
+/** Drive storage quota exhausted. Needs the user to free space; not transient. */
+class DriveFullError extends Error {
+  constructor (msg) { super(msg); this.name = 'DriveFullError' }
+}
 /** Any other non-success HTTP response. */
 class HttpError extends Error {
   constructor (msg, status, body) { super(msg); this.name = 'HttpError'; this.status = status; this.body = body }
 }
 
-module.exports = { NetworkError, RateLimitError, AuthError, HttpError }
+module.exports = { NetworkError, RateLimitError, AuthError, HttpError, DriveFullError }

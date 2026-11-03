@@ -6,7 +6,7 @@ const os = require('os')
 const path = require('path')
 const { Storage } = require('../src/storage')
 const { Uploader, MAX_BACKOFF_MS } = require('../src/uploader')
-const { NetworkError, RateLimitError, AuthError, HttpError } = require('../src/errors')
+const { NetworkError, RateLimitError, AuthError, HttpError, DriveFullError } = require('../src/errors')
 
 const JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xd9])
 function tmpdir () { return fs.mkdtempSync(path.join(os.tmpdir(), 'sktl-up-')) }
@@ -162,4 +162,13 @@ test('not ready (no auth) skips without touching the queue', async () => {
   await up.runPass()
   assert.strictEqual(target.calls.upload, 0)
   assert.strictEqual(up.state, 'needs_auth')
+})
+
+test('Drive full stops the pass and waits the max backoff', async () => {
+  const { storage, target, up } = await setup(2)
+  target.failNext.push({ err: new DriveFullError('full') })
+  assert.strictEqual(await up.runPass(), MAX_BACKOFF_MS)
+  assert.strictEqual(up.state, 'drive_full')
+  assert.strictEqual(target.calls.upload, 1)
+  assert.strictEqual((await storage.scanQueue()).length, 4)
 })

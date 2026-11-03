@@ -70,7 +70,7 @@ Capture pauses while the page is hidden (screen off, another app in front). The 
 
 ### Sessions
 
-A session starts when capture starts and ends when it stops. The session ID is the tablet's local time, `YYYY-MM-DD_HHMMSS`. Frames go to one folder per session, on disk and in Drive. A reload or short interruption, up to 5 minutes or 10 intervals, whichever is longer, resumes the same session. Test shots go to `test-shots/`.
+A session starts when capture starts and ends when it stops. The session ID is the tablet's local time, `YYYY-MM-DD_HHMMSS`. Frames go to one folder per session, on disk and in Drive. A reload, a short interruption or a brief Auto dropout, up to 5 minutes or 10 intervals, whichever is longer, resumes the same session. Changing the mode yourself always starts a new one. Test shots go to `test-shots/`.
 
 ### Storage estimate
 
@@ -84,11 +84,11 @@ One comparison on one path, evaluated both in the browser (websocket subscriptio
 - `autoOperator`: `equals` or `notEquals`
 - `autoValue`: compared as a trimmed string, case-insensitive unless `autoCaseSensitive` is set
 - `autoDebounceSeconds` (default 30): the condition must hold this long before capture starts or stops
-- `autoStaleSeconds` (default 120): if no update arrives in this window, the condition is false
+- `autoStaleSeconds` (default 0, off): if no update arrives in this window, the condition is false
 
 A missing path, a `null` value or stale data makes the condition false **immediately**, with no debounce, so capture never runs on missing data.
 
-**Watch out for staleness on slow paths.** Many sources publish `navigation.state` only when it changes. With the default 120 s staleness window, Auto stops two minutes after the last change. For paths like that, set `autoStaleSeconds` to `0` to disable the check, or use a path that updates continuously.
+**Staleness and slow paths.** Many sources publish `navigation.state` only when it changes, so the staleness check is off by default. A 120 s window would stop Auto two minutes after every state change. For a path that updates continuously, such as `navigation.speedOverGround`, set something like `autoStaleSeconds: 120` so a dead sensor stops capture.
 
 To test by hand, send a delta from any read/write client:
 
@@ -134,7 +134,7 @@ A public npm package can't keep a client secret confidential, which is why you b
   uploaded/<session>/...       after upload, in move/keep modes
 ```
 
-- Writes are atomic (temp file, fsync, rename). `POST /frames` responds once the frame is on disk.
+- Writes are atomic (temp file, fsync, rename). `POST /frames` responds once the frame is on disk. A frame is identified by session plus capture timestamp, so a client retry after a lost response returns `200 duplicate` instead of storing a second copy.
 - Frame filenames are UTC timestamps. The sidecar `.json` records capture time, position, SOG, COG, heading and wind, in Signal K SI units, snapshotted from the server at ingest. With `writeExif` on, GPS position, speed, track, heading and UTC time go into the JPEG EXIF as well.
 - `afterUpload` options:
   - `move` (default): move to `uploaded/` and prune after `keepUploadedDays`.
@@ -147,6 +147,7 @@ A public npm package can't keep a client secret confidential, which is why you b
 ### Uploader behavior
 
 - Every `uploadIntervalSeconds` (default 60), the uploader sends queued files oldest first, `uploadConcurrency` at a time. Files over 5 MB use a resumable upload.
+- A full Drive (403 `storageQuotaExceeded`) stops the pass, shows `drive_full` in status and retries every 15 minutes.
 - Network failures and Google 5xx errors stop the pass and back off exponentially, up to 15 minutes. Rate limits (429, or 403 `rateLimitExceeded`) back off with jitter and honor `Retry-After`. On a 401 the uploader refreshes the token once. If the refresh fails, status shows `needs_auth`.
 - No duplicates after a crash: before each upload the plugin records the file in `inflight.json`. Files left there after a crash or a dropped connection are looked up in Drive by `appProperties` before being uploaded again. Normal uploads skip that extra call.
 - Folder IDs are cached in `drive-folders.json`. If you delete a folder in Drive, the 404 clears the cache and the folder is recreated.
@@ -190,7 +191,7 @@ All routes are under `/plugins/signalk-tablet-camera-timelapse/`.
 
 | Method | Path | Notes |
 |---|---|---|
-| POST | `/frames?session=&ts=&mode=&device=&w=&h=` | raw `image/jpeg` body. Returns 201, 400, 413, 415 or 507 (`disk_low` or `cache_full`) |
+| POST | `/frames?session=&ts=&mode=&device=&w=&h=` | raw `image/jpeg` body. Returns 201, 200 (`duplicate`), 400, 413, 415 or 507 (`disk_low` or `cache_full`) |
 | GET/PUT | `/mode` | `{"mode":"off"\|"auto"\|"on"}` |
 | GET | `/status` | mode, Auto evaluation, queue, cache, disk, Drive auth and uploader state, recent errors |
 | GET | `/config/client` | config subset for the wrapper |

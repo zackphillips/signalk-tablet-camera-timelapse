@@ -6,7 +6,7 @@ const os = require('os')
 const path = require('path')
 const { DriveAuth } = require('../src/drive/oauth')
 const { DriveTarget, APP_PROP_KEY } = require('../src/drive/target')
-const { RateLimitError, AuthError, NetworkError } = require('../src/errors')
+const { RateLimitError, AuthError, NetworkError, DriveFullError, HttpError } = require('../src/errors')
 
 function tmpdir () { return fs.mkdtempSync(path.join(os.tmpdir(), 'sktl-drive-')) }
 
@@ -164,6 +164,8 @@ test('target: error classification', async () => {
   await assert.rejects(mk(res(429, {}, { 'retry-after': '7' })).exists('k', 'p'), (e) => e instanceof RateLimitError && e.retryAfterMs === 7000)
   await assert.rejects(mk(res(403, '{"error":{"errors":[{"reason":"userRateLimitExceeded"}]}')).exists('k', 'p'), RateLimitError)
   await assert.rejects(mk(res(503, {})).exists('k', 'p'), NetworkError)
+  await assert.rejects(mk(res(403, '{"error":{"errors":[{"reason":"storageQuotaExceeded"}]}')).exists('k', 'p'), DriveFullError)
+  await assert.rejects(mk(res(403, '{"error":{"errors":[{"reason":"insufficientFilePermissions"}]}')).exists('k', 'p'), HttpError)
   const t = new DriveTarget({ auth: authStub(), fetch: async () => { throw new TypeError('fetch failed') }, folderCachePath: path.join(d, 'f.json') })
   await assert.rejects(t.exists('k', 'p'), NetworkError)
 })
