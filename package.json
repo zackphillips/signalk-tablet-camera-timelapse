@@ -1,0 +1,50 @@
+{
+  "name": "signalk-tablet-camera-timelapse",
+  "version": "0.1.0",
+  "description": "Wraps a Signal K web app (default Freeboard-SK) full screen and takes timelapse photos with the tablet camera. Frames are stored on the server and uploaded to Google Drive in the background.",
+  "main": "index.js",
+  "keywords": [
+    "signalk-node-server-plugin",
+    "signalk-webapp",
+    "signalk-category-utility",
+    "signalk-category-cloud",
+    "timelapse",
+    "camera",
+    "google-drive"
+  ],
+  "signalk": {
+    "displayName": "Tablet Camera Timelapse",
+    "appIcon": "./icons/icon-192.png",
+    "screenshots": [
+      "./screenshots/wrapper.png",
+      "./screenshots/drawer.png"
+    ]
+  },
+  "files": [
+    "index.js",
+    "src/",
+    "public/",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "lint": "node --check index.js && for f in src/*.js src/drive/*.js public/js/*.js public/sw.js; do node --check $f || exit 1; done"
+  },
+  "engines": {
+    "node": ">=18.15"
+  },
+  "dependencies": {
+    "piexifjs": "^1.0.6"
+  },
+  "license": "MIT",
+  "author": "Zack Phillips",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zackphillips/signalk-tablet-camera-timelapse.git"
+  },
+  "bugs": {
+    "url": "https://github.com/zackphillips/signalk-tablet-camera-timelapse/issues"
+  },
+  "homepage": "https://github.com/zackphillips/signalk-tablet-camera-timelapse#readme"
+}
