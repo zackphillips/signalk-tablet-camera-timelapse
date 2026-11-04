@@ -1,13 +1,17 @@
 {
   "name": "signalk-tablet-camera-timelapse",
-  "version": "0.1.0",
-  "description": "Wraps a Signal K web app (default Freeboard-SK) full screen and takes timelapse photos with the tablet camera. Frames are stored on the server and uploaded to Google Drive in the background.",
+  "version": "0.2.0",
+  "description": "Timelapse photos from the tablet camera, as a native Freeboard-SK extension and a KIP-embeddable page. Frames are stored on the Signal K server and uploaded to Google Drive in the background.",
   "main": "index.js",
   "keywords": [
     "signalk-node-server-plugin",
     "signalk-webapp",
+    "signalk-category-plotter-extensions",
+    "signalk-category-chart-plotters",
     "signalk-category-utility",
     "signalk-category-cloud",
+    "freeboard-sk",
+    "kip",
     "timelapse",
     "camera",
     "google-drive"
@@ -16,8 +20,8 @@
     "displayName": "Tablet Camera Timelapse",
     "appIcon": "./icons/icon-192.png",
     "screenshots": [
-      "./screenshots/wrapper.png",
-      "./screenshots/drawer.png"
+      "./screenshots/freeboard-panel.png",
+      "./screenshots/kip.png"
     ]
   },
   "files": [
@@ -29,7 +33,7 @@
   ],
   "scripts": {
     "test": "node --test test/*.test.js",
-    "lint": "node --check index.js && for f in src/*.js src/drive/*.js public/js/*.js public/sw.js; do node --check $f || exit 1; done"
+    "lint": "node --check index.js && for f in src/*.js src/drive/*.js public/js/auto.js; do node --check $f || exit 1; done && for f in public/js/core/*.js public/js/hosts/*.js; do node --input-type=module --check < $f || { echo \"syntax error in $f\"; exit 1; }; done"
   },
   "engines": {
     "node": ">=18.15"

@@ -3,7 +3,8 @@
 const fs = require('fs')
 const fsp = fs.promises
 const path = require('path')
-const { buildSchema, scanWebapps, withDefaults, SELF } = require('./schema')
+const { buildSchema, withDefaults, SELF } = require('./schema')
+const { buildManifest } = require('./manifest')
 const { Storage, isValidSessionId, atomicWrite } = require('./storage')
 const { DriveAuth } = require('./drive/oauth')
 const { DriveTarget } = require('./drive/target')
@@ -207,6 +208,36 @@ module.exports = function (app) {
     }
   }
 
+  /*
+   * Freeboard-SK (and any host implementing the Signal K plotter extensions
+   * API) discovers us through the plotterExtensions resource type. The
+   * server unregisters the provider when the plugin stops.
+   */
+  function registerExtension () {
+    if (typeof app.registerResourceProvider !== 'function') {
+      app.debug('registerResourceProvider unavailable; Freeboard extension not offered')
+      return
+    }
+    const version = require('../package.json').version
+    const readOnly = async () => { throw new Error(`${plugin.id} is a read-only provider`) }
+    try {
+      app.registerResourceProvider({
+        type: 'plotterExtensions',
+        methods: {
+          listResources: async () => (started ? { [plugin.id]: buildManifest({ version, base: WEBAPP_PATH }) } : {}),
+          getResource: async (id) => {
+            if (!started || id !== plugin.id) throw new Error(`No such plotterExtensions resource: ${id}`)
+            return buildManifest({ version, base: WEBAPP_PATH })
+          },
+          setResource: readOnly,
+          deleteResource: readOnly
+        }
+      })
+    } catch (e) {
+      recordError(`registering the Freeboard extension failed: ${e.message}`)
+    }
+  }
+
   function every (ms, fn) {
     const t = setInterval(() => {
       Promise.resolve().then(fn).catch(e => recordError(e.message))
@@ -256,6 +287,7 @@ module.exports = function (app) {
 
     startAuto()
     started = true
+    registerExtension()
 
     storage.init()
       .then(async () => {
@@ -302,10 +334,10 @@ module.exports = function (app) {
     autoState = null
   }
 
-  plugin.schema = () => buildSchema(scanWebapps(app.config))
+  plugin.schema = () => buildSchema()
 
   plugin.uiSchema = () => ({
-    'ui:order': ['hostedWebapp', 'buttonCorner', 'intervalSeconds', 'jpegQuality', 'defaultMode', 'autoPath', 'autoOperator', 'autoValue', 'autoCaseSensitive', 'autoStaleSeconds', 'autoDebounceSeconds', 'drive', '*'],
+    'ui:order': ['intervalSeconds', 'jpegQuality', 'defaultMode', 'autoPath', 'autoOperator', 'autoValue', 'autoCaseSensitive', 'autoStaleSeconds', 'autoDebounceSeconds', 'drive', '*'],
     drive: { clientSecret: { 'ui:widget': 'password' } }
   })
 
@@ -321,41 +353,13 @@ module.exports = function (app) {
       res.json({
         pluginId: plugin.id,
         webappPath: WEBAPP_PATH,
-        hostedWebapp: opts.hostedWebapp,
-        buttonCorner: opts.buttonCorner,
         intervalSeconds: opts.intervalSeconds,
         jpegQuality: opts.jpegQuality,
-        displayMode: opts.displayMode,
         auto: { configured: Auto.isConfigured(autoConfig()), ...autoConfig() },
         driveEnabled: !!opts.drive.enabled,
         mode: state.mode
       })
     })
-
-    r('readonly').get('/manifest.webmanifest', (req, res) => {
-      const display = opts.displayMode
-      const m = {
-        name: 'Tablet Camera Timelapse',
-        short_name: 'Timelapse',
-        description: 'Signal K web app wrapper with tablet-camera timelapse',
-        id: WEBAPP_PATH,
-        start_url: WEBAPP_PATH,
-        scope: WEBAPP_PATH,
-        display,
-        background_color: '#0b1a2a',
-        theme_color: '#0b1a2a',
-        icons: [
-          { src: `${WEBAPP_PATH}icons/icon-192.png`, sizes: '192x192', type: 'image/png', purpose: 'any' },
-          { src: `${WEBAPP_PATH}icons/icon-512.png`, sizes: '512x512', type: 'image/png', purpose: 'any' },
-          { src: `${WEBAPP_PATH}icons/icon-maskable-512.png`, sizes: '512x512', type: 'image/png', purpose: 'maskable' }
-        ]
-      }
-      if (display === 'fullscreen') m.display_override = ['fullscreen', 'standalone']
-      if (opts.orientation !== 'any') m.orientation = opts.orientation
-      res.type('application/manifest+json').send(JSON.stringify(m))
-    })
-
-    r('readonly').get('/webapps', (req, res) => res.json(scanWebapps(app.config)))
 
     r('readonly').get('/mode', (req, res) => res.json({ mode: state.mode, modeChangedAt: state.modeChangedAt }))
 

@@ -1,0 +1,155 @@
+/* Shared UI. Every color, font and radius is a variable so each host adapter
+   can match its host: Freeboard (Material 3 light, azure) sets them by
+   data-host, KIP copies its live theme variables from the parent page. */
+:root {
+  --tl-font: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --tl-bg: #0b1a2a;
+  --tl-fg: #e8eef4;
+  --tl-muted: #9fb0c0;
+  --tl-line: rgba(255, 255, 255, 0.12);
+  --tl-field: #0f2236;
+  --tl-accent: #3fa7ff;
+  --tl-on-accent: #031426;
+  --tl-warn-bg: #3a2a05;
+  --tl-warn-fg: #ffe9a8;
+  --tl-radius: 10px;
+  --tl-grey: #8a96a3;
+  --tl-amber: #f2a33a;
+  --tl-red: #ff3b30;
+  --tl-yellow: #ffd60a;
+  --tl-btn-bg: rgba(10, 20, 32, 0.45);
+  --tl-btn-fg: rgba(255, 255, 255, 0.92);
+  color-scheme: dark;
+}
+
+/* Freeboard-SK: Material 3 light with the azure palette it uses. */
+:root[data-host="freeboard"] {
+  --tl-font: Roboto, "Helvetica Neue", sans-serif;
+  --tl-bg: #faf9fd;
+  --tl-fg: #1a1b1f;
+  --tl-muted: #44474e;
+  --tl-line: #e0e2ec;
+  --tl-field: #ffffff;
+  --tl-accent: #005cbb;
+  --tl-on-accent: #ffffff;
+  --tl-warn-bg: #ffdad6;
+  --tl-warn-fg: #410002;
+  --tl-radius: 12px;
+  --tl-btn-bg: rgba(20, 26, 32, 0.78);
+  --tl-btn-fg: #e8edf2;
+  color-scheme: light;
+}
+/* Freeboard night mode: dark Material 3 with the red palette it switches to. */
+:root[data-host="freeboard"][data-night] {
+  --tl-bg: #1a1111;
+  --tl-fg: #f1dedc;
+  --tl-muted: #c2a9a6;
+  --tl-line: #3b2c2b;
+  --tl-field: #231918;
+  --tl-accent: #ffb4ab;
+  --tl-on-accent: #690005;
+  --tl-warn-bg: #93000a;
+  --tl-warn-fg: #ffdad6;
+  --tl-btn-bg: rgba(26, 17, 17, 0.85);
+  --tl-btn-fg: #ffb4ab;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: var(--tl-bg);
+  color: var(--tl-fg);
+  font: 14px/1.4 var(--tl-font);
+}
+/* Widgets float over the chart or sit in a KIP card: no page background. */
+body.tl-transparent { background: transparent; }
+
+/* ---------- compact control ---------- */
+.tl-compact {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 6px;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.tl-mode-btn {
+  position: relative;
+  width: min(64px, 70vmin);
+  height: min(64px, 70vmin);
+  border-radius: 50%;
+  border: 1px solid var(--tl-line);
+  background: var(--tl-btn-bg);
+  color: var(--tl-btn-fg);
+  display: grid;
+  place-items: center;
+  padding: 0;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-touch-callout: none;
+}
+.tl-mode-btn:active { transform: scale(0.95); }
+.tl-mode-btn svg { width: 42%; height: 42%; margin-top: -14%; }
+.tl-mode-label { position: absolute; bottom: 16%; font-size: 10px; font-weight: 700; letter-spacing: 0.06em; }
+.tl-dot { position: absolute; top: 6%; right: 6%; width: 22%; height: 22%; border-radius: 50%; border: 2px solid var(--tl-bg); background: var(--tl-grey); }
+body.tl-transparent .tl-dot { border-color: rgba(10, 20, 32, 0.8); }
+.tl-dot[data-state="off"] { background: var(--tl-grey); }
+.tl-dot[data-state="waiting"] { background: var(--tl-amber); }
+.tl-dot[data-state="capturing"] { background: var(--tl-red); animation: tl-pulse 1.4s ease-in-out infinite; }
+.tl-dot[data-state="error"] { background: var(--tl-yellow); }
+@keyframes tl-pulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(255, 59, 48, 0.7); } 50% { box-shadow: 0 0 0 6px rgba(255, 59, 48, 0); } }
+.tl-compact-line { font-size: 12px; color: var(--tl-muted); text-align: center; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tl-compact-line.tl-warn { color: var(--tl-yellow); }
+
+/* ---------- settings view ---------- */
+.tl-settings { padding: 4px 16px 24px; }
+.tl-settings section { padding: 12px 0; border-bottom: 1px solid var(--tl-line); }
+.tl-settings section:last-of-type { border-bottom: 0; }
+.tl-settings h2 { font-size: 12px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.08em; color: var(--tl-muted); margin: 0 0 8px; }
+.tl-settings label { display: block; margin: 8px 0; color: var(--tl-muted); font-size: 13px; }
+.tl-settings select {
+  display: block; width: 100%; margin-top: 4px; padding: 8px;
+  background: var(--tl-field); color: var(--tl-fg);
+  border: 1px solid var(--tl-line); border-radius: 8px; font: inherit; font-size: 15px;
+}
+.tl-settings button {
+  background: transparent; color: var(--tl-accent);
+  border: 1px solid var(--tl-line); border-radius: 20px;
+  padding: 8px 16px; font: inherit; font-weight: 500; cursor: pointer;
+}
+.tl-settings button.tl-primary { background: var(--tl-accent); color: var(--tl-on-accent); border-color: transparent; }
+.tl-settings button:disabled { opacity: 0.45; cursor: default; }
+.tl-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
+.tl-seg { display: grid; grid-template-columns: repeat(3, 1fr); border: 1px solid var(--tl-line); border-radius: 20px; overflow: hidden; }
+.tl-settings .tl-seg button { border: 0; border-radius: 0; color: var(--tl-fg); padding: 9px; }
+.tl-settings .tl-seg button + button { border-left: 1px solid var(--tl-line); }
+.tl-settings .tl-seg button[aria-checked="true"] { background: var(--tl-accent); color: var(--tl-on-accent); }
+.tl-hint { color: var(--tl-muted); font-size: 13px; margin: 6px 0 0; }
+.tl-banner { margin: 8px 0; padding: 10px 12px; border-radius: var(--tl-radius); background: var(--tl-warn-bg); color: var(--tl-warn-fg); font-size: 14px; }
+.tl-banner p { margin: 6px 0 0; font-size: 13px; }
+.tl-banner code { word-break: break-all; }
+.tl-kv { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin: 0; font-size: 14px; }
+.tl-kv dt { color: var(--tl-muted); }
+.tl-kv dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; word-break: break-word; }
+.tl-kv dd.tl-warn { color: var(--tl-warn-fg); background: var(--tl-warn-bg); border-radius: 4px; padding: 0 4px; }
+.tl-preview, .tl-test-img { width: 100%; border-radius: 8px; margin-top: 8px; background: #000; display: block; }
+.tl-preview { aspect-ratio: 16 / 9; object-fit: contain; }
+/* Night mode (Freeboard or KIP): camera images would glare on a dark bridge. */
+[data-night] .tl-preview, [data-night] .tl-test-img { filter: brightness(0.35) sepia(0.6) hue-rotate(-30deg); }
+.tl-preview[hidden], .tl-test-img[hidden] { display: none; }
+.tl-code { font: 600 24px/1.2 ui-monospace, Menlo, monospace; letter-spacing: 0.08em; color: var(--tl-fg); }
+.tl-toast { position: sticky; bottom: 8px; margin-top: 8px; padding: 10px 14px; border-radius: var(--tl-radius); background: var(--tl-fg); color: var(--tl-bg); font-size: 14px; }
+.tl-settings a { color: var(--tl-accent); }
+
+/* ---------- KIP / standalone page layout ---------- */
+.tl-page { min-height: 100vh; display: flex; flex-direction: column; }
+.tl-page-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 16px 0; }
+.tl-page-head h1 { font-size: 16px; font-weight: 500; margin: 0; }
+.tl-icon-btn { background: transparent; border: 0; color: var(--tl-fg); font-size: 22px; width: 40px; height: 40px; border-radius: 50%; cursor: pointer; }
+.tl-page-compact { height: 100vh; }
+.tl-page-compact[hidden], .tl-page-full[hidden] { display: none; }

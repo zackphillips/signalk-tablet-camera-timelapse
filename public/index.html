@@ -2,88 +2,22 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#0b1a2a">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Tablet Camera Timelapse</title>
-  <link rel="manifest" href="/plugins/signalk-tablet-camera-timelapse/manifest.webmanifest" crossorigin="use-credentials">
   <link rel="icon" href="icons/icon-192.png">
-  <link rel="apple-touch-icon" href="icons/icon-192.png">
-  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="css/ui.css">
 </head>
 <body>
-  <iframe id="hosted" title="Hosted Signal K app" allow="fullscreen; geolocation" allowfullscreen></iframe>
-
-  <div id="fs-shield" hidden aria-hidden="true"></div>
-
-  <div id="banner" class="banner" hidden role="alert">
-    <div class="banner-body"></div>
-    <button class="banner-close" type="button" aria-label="Dismiss">×</button>
-  </div>
-
-  <div id="toast" class="toast" hidden></div>
-
-  <div id="overlay" class="overlay corner-bottom-left">
-    <button id="mode-btn" type="button" aria-label="Timelapse mode">
-      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4.5 7.6 6.5H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-9a2 2 0 0 0-2-2h-2.6L15 4.5H9Zm3 4a4.5 4.5 0 1 1 0 9 4.5 4.5 0 0 1 0-9Zm0 1.8a2.7 2.7 0 1 0 0 5.4 2.7 2.7 0 0 0 0-5.4Z" fill="currentColor"/></svg>
-      <span class="mode-label">OFF</span>
-      <span class="dot" data-state="off"></span>
-    </button>
-  </div>
-
-  <aside id="drawer" class="drawer" hidden aria-label="Timelapse settings">
-    <header class="drawer-head">
+  <!-- Small tiles (a KIP Embed Webpage widget): one button. -->
+  <div class="tl-page-compact" id="compact" hidden></div>
+  <!-- Larger tiles and standalone: the full settings view. -->
+  <div class="tl-page tl-page-full" id="full" hidden>
+    <header class="tl-page-head">
       <h1>Timelapse</h1>
-      <button id="drawer-close" type="button" aria-label="Close">×</button>
+      <button class="tl-icon-btn" id="back" type="button" aria-label="Back" hidden>×</button>
     </header>
-
-    <section>
-      <div class="seg" id="mode-seg" role="radiogroup" aria-label="Mode">
-        <button type="button" data-mode="off">Off</button>
-        <button type="button" data-mode="auto">Auto</button>
-        <button type="button" data-mode="on">On</button>
-      </div>
-      <p class="hint" id="auto-desc"></p>
-    </section>
-
-    <section>
-      <h2>Status</h2>
-      <dl class="kv" id="status-list"></dl>
-    </section>
-
-    <section>
-      <h2>Camera</h2>
-      <label>Camera <select id="camera-select"></select></label>
-      <label>Resolution <select id="res-select"></select></label>
-      <video id="preview" playsinline muted autoplay></video>
-      <div class="row">
-        <button id="test-shot" type="button" class="primary">Test shot</button>
-        <span id="test-result" class="hint"></span>
-      </div>
-      <img id="test-img" alt="Last test shot" hidden>
-      <p class="hint" id="estimate"></p>
-    </section>
-
-    <section>
-      <h2>Hosted app</h2>
-      <label>Show <select id="app-select"></select></label>
-    </section>
-
-    <section>
-      <h2>Google Drive</h2>
-      <div id="drive-box"></div>
-    </section>
-
-    <section>
-      <h2>App</h2>
-      <div class="row">
-        <button id="install-btn" type="button" hidden>Install app</button>
-        <button id="fs-btn" type="button">Full screen</button>
-        <button id="reload-btn" type="button">Reload</button>
-      </div>
-    </section>
-  </aside>
-
-  <script src="js/auto.js"></script>
-  <script src="js/app.js"></script>
+    <div id="settings"></div>
+  </div>
+  <script type="module" src="js/hosts/page.js"></script>
 </body>
 </html>
