@@ -138,6 +138,27 @@ export function insecureHelp () {
   return `Chrome only allows the camera on HTTPS or on an origin you trust. On a dedicated tablet, open <code>chrome://flags/#unsafely-treat-insecure-origin-as-secure</code>, add <code>${escapeHtml(location.origin)}</code>, enable it and restart Chrome. Otherwise enable HTTPS on the Signal K server with a locally trusted CA.`
 }
 
+// ---------- in-page dialog ----------
+/**
+ * Ask a question in the page itself. confirm() is unavailable inside
+ * Freeboard's sandboxed extension frames (no allow-modals).
+ * buttons: [{ label, value, kind: 'primary'|'danger'|undefined }]. Resolves
+ * the chosen value, or null when dismissed.
+ */
+export function ask (message, buttons = [{ label: 'Cancel', value: null }, { label: 'OK', value: true, kind: 'primary' }], { detail } = {}) {
+  return new Promise((resolve) => {
+    const done = (v) => { overlay.remove(); resolve(v) }
+    const overlay = h('div', { class: 'tl-dialog-backdrop', onclick: (e) => { if (e.target === overlay) done(null) } },
+      h('div', { class: 'tl-dialog', role: 'dialog', 'aria-modal': 'true' },
+        h('p', { class: 'tl-dialog-msg', text: message }),
+        detail ? h('p', { class: 'tl-hint', text: detail }) : null,
+        h('div', { class: 'tl-dialog-buttons' },
+          ...buttons.map(b => h('button', { type: 'button', class: b.kind === 'primary' ? 'tl-primary' : (b.kind === 'danger' ? 'tl-danger' : null), text: b.label, onclick: () => done(b.value) })))))
+    document.body.append(overlay)
+    overlay.querySelector('.tl-dialog-buttons button:last-child').focus()
+  })
+}
+
 // ---------- compact control (widget tiles) ----------
 /**
  * A round mode button with a status dot, a label and one status line.
@@ -187,7 +208,7 @@ export function mountCompact (root, client, { onLongPress, showLine = true } = {
 }
 
 // ---------- full settings view ----------
-export function mountSettings (root, client, { previewActive = () => true } = {}) {
+export function mountSettings (root, client, { previewActive = () => true, openGallery } = {}) {
   root.classList.add('tl-settings')
   root.innerHTML = ''
 
@@ -238,8 +259,11 @@ export function mountSettings (root, client, { previewActive = () => true } = {}
     toastTimer = setTimeout(() => { toastEl.hidden = true }, 4000)
   }
 
+  const galleryBtn = openGallery
+    ? h('button', { type: 'button', class: 'tl-gallery-btn', onclick: () => Promise.resolve(openGallery()).catch(e => toast(e.message)) }, 'Photos & videos')
+    : null
   root.append(
-    h('section', {}, modeSeg, autoDesc),
+    h('section', {}, modeSeg, autoDesc, galleryBtn),
     problem,
     h('section', {}, h('h2', { text: 'Status' }), statusList),
     h('section', {}, h('h2', { text: 'Camera' }),
@@ -370,7 +394,11 @@ export function mountSettings (root, client, { previewActive = () => true } = {}
       p(`Connected. Folder <b>${escapeHtml(st.drive.folderName)}</b>${up ? ` · uploader ${escapeHtml(up.state.replace('_', ' '))}` : ''}.`)
       driveBox.append(h('div', { class: 'tl-row' },
         btn('Upload now', () => API.uploadNow().then(() => toast('Upload pass started')).catch(fail)),
-        btn('Disconnect', () => { if (confirm('Disconnect Google Drive? Queued frames stay on the Pi.')) API.driveRevoke().then(() => client.send({ t: 'refresh' })).catch(fail) })))
+        btn('Disconnect', async () => {
+          if (await ask('Disconnect Google Drive?', [{ label: 'Cancel', value: null }, { label: 'Disconnect', value: true, kind: 'danger' }], { detail: 'Queued frames stay on the Pi and upload after you reconnect.' })) {
+            API.driveRevoke().then(() => client.send({ t: 'refresh' })).catch(fail)
+          }
+        })))
     } else {
       if (a.state === 'needs_auth') p('Authorization expired or was revoked. Reconnect to resume uploads.')
       if (a.error) p(escapeHtml(a.error))

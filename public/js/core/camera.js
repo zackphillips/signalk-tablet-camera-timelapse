@@ -201,6 +201,21 @@ export function createCamera ({ onChange, jpegQuality = () => 0.85 }) {
     return { blob: await toJpeg(v, w, h, jpegQuality()), w, h, method: 'canvas' }
   }
 
+  /**
+   * Gallery copies of a captured still: a 320 px thumbnail and, if hdWidth,
+   * an HD proxy for video export. One decode at the larger size.
+   */
+  async function galleryCopies (blob, hdWidth) {
+    try {
+      const bmp = await createImageBitmap(blob, hdWidth ? { resizeWidth: hdWidth, resizeQuality: 'high' } : { resizeWidth: 320, resizeQuality: 'medium' })
+      const hd = hdWidth ? await toJpeg(bmp, bmp.width, bmp.height, 0.85) : null
+      const tw = 320
+      const thumb = await toJpeg(bmp, tw, Math.round(bmp.height * tw / bmp.width), 0.7)
+      bmp.close()
+      return { thumb, hd }
+    } catch (e) { return null }
+  }
+
   /** Small JPEG of the live stream for settings previews. */
   async function previewFrame (maxW = 480) {
     if (!C.stream) return null
@@ -217,6 +232,7 @@ export function createCamera ({ onChange, jpegQuality = () => 0.85 }) {
     setResolution,
     takeFrame,
     previewFrame,
+    galleryCopies,
     get label () { return C.track ? C.track.label : '' },
     get usesImageCapture () { return !!C.imageCapture }
   }

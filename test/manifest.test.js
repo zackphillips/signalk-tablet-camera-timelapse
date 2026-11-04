@@ -44,11 +44,12 @@ test('runtime and panel pages load their module scripts, and every import resolv
       check(path.resolve(path.dirname(file), spec))
     }
   }
-  for (const page of ['fsk/runtime.html', 'fsk/panel.html', 'fsk/widget.html', 'index.html']) {
+  for (const page of ['fsk/runtime.html', 'fsk/panel.html', 'fsk/widget.html', 'fsk/gallery.html', 'index.html', 'gallery.html']) {
     const html = fs.readFileSync(path.join(PUBLIC, page), 'utf8')
     const scripts = [...html.matchAll(/<script type="module" src="([^"]+)"/g)].map(x => x[1])
     assert.strictEqual(scripts.length, 1, page)
     check(path.resolve(path.dirname(path.join(PUBLIC, page)), scripts[0]))
   }
   assert.ok([...seen].some(f => f.includes('vendor/plotterext-bus')), 'bus library is vendored')
+  assert.ok([...seen].some(f => f.includes('vendor/mp4-muxer')), 'mp4 muxer is vendored')
 })

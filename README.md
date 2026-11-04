@@ -10,6 +10,7 @@ It runs inside the apps you already use, with their own UI:
   - Capture runs in a hidden background runtime, so it keeps going whichever panel is open.
 - **KIP:** a page for KIP's **Embed Webpage** widget. It takes KIP's live theme (day, night, light) and shrinks to a single button in small tiles.
 - **Anything else:** the same page works standalone at `/signalk-tablet-camera-timelapse/`.
+- **Photos and videos** (from either): browse the photos on the Pi, play sessions back, trim or delete frames, and make MP4 timelapse videos in the browser with an optional time, speed and wind overlay.
 
 ![Freeboard-SK with the Timelapse panel open](public/screenshots/freeboard-panel.png)
 
@@ -69,7 +70,7 @@ KIP unloads widgets on dashboards you aren't looking at, so this page only captu
 
 ## 4. One capture engine per tablet
 
-Every context that can capture competes for one lock in the browser (Web Locks): Freeboard's background runtime, the KIP page and the standalone page. The rules:
+Every context that can capture competes for one lock in the browser (Web Locks): Freeboard's background runtime, the KIP page, the standalone page and the gallery page (so capture continues while you browse photos in a tab in front of KIP). The rules:
 
 - **Only one engine runs on a tablet.** The other contexts are just UIs, and they talk to the engine over a same-origin BroadcastChannel.
 - **The engine has to be visible.** An engine whose page is hidden (for example a tab in the background) steps down.
@@ -77,7 +78,24 @@ Every context that can capture competes for one lock in the browser (Web Locks):
 
 The **Running in** row in the status list shows which context holds it. Several tablets each run their own engine. The mode (Off/Auto/On) is stored on the server and shared by all of them.
 
-## 5. Using it
+## 5. Photos and videos
+
+Tap **Photos & videos** at the top of the settings. In Freeboard it opens in a floating window over the chart. From KIP or the standalone page it opens `/signalk-tablet-camera-timelapse/gallery.html` in a new tab.
+
+![The gallery in a Freeboard window](public/screenshots/gallery.png)
+
+- **Sessions:** every session on the Pi, newest first, with a thumbnail, its length and how many frames are still waiting to upload. The gallery shows what is on the Pi. With `afterUpload: move` (default) that is everything from the last `keepUploadedDays`. With `delete`, frames leave the Pi once they reach Drive.
+- **Playback:** scrub or play a session from its thumbnails at 5–30 fps. Stop on a frame to load it sharp. The caption shows the time, speed and course from the frame's sidecar.
+- **Select and trim:** **Start here** / **End here** mark a range. **Keep only selection** trims the session to it. **Delete selection** cuts it out. **Delete this frame** and **Delete whole session** do what they say. Each delete asks first. If the frames are already in Drive you can delete on the Pi only, or on both; Drive copies go to the Drive trash, where they can be restored for 30 days. Drive deletions are queued like uploads, so they also work while offline.
+- **Make a video:** of the selection, at 12/24/30/60 fps and 720p up to 2160p (capped at the photo size), optionally with a time, speed, course and wind overlay. Encoding runs on the tablet with WebCodecs (H.264, VP9 if the device has no H.264 encoder) into an MP4; the Pi does no video work. The result plays in the page, and you can:
+  - **Save to Pi (and Drive):** stored in `<storagePath>/videos/` and uploaded to the `videos` folder in Drive. Saved videos are listed under **Videos** in the gallery, where they can be played, downloaded or deleted.
+  - **Download** or **Share…** (Android share sheet). Freeboard's extension frames are sandboxed without downloads, so inside Freeboard save to the Pi and download from the gallery page in a browser tab.
+
+**HD proxies.** Pulling full-size 12 MP frames over boat Wi-Fi to make a 1080p video is slow: about 3 MB per frame. So after each frame, the tablet also stores a 320 px thumbnail and a 1920 px "HD proxy" (about 400 KB) on the Pi. They are never uploaded. Videos up to the proxy size are built from the proxies; larger ones read the originals. The gallery shows which before you start. Set `proxyWidth` to `0` to turn proxies off. Thumbnails and proxies are deleted with their frame, and they are not counted in `maxCacheMB`, which they exceed by roughly 13%.
+
+The whole video is assembled in the tablet's memory before it is saved, so keep exports to a few hundred MB (the gallery shows the estimated size; 10 hours at a 10 s interval is about 2 minutes of 1080p30, roughly 120 MB).
+
+## 6. Using it
 
 The mode survives reloads and restarts according to `defaultMode`: Off, Auto or On at plugin start, or **Last used**.
 
@@ -91,7 +109,7 @@ A session starts when capture starts and ends when it stops. The session ID is t
 
 At a 10 s interval you get 360 frames/hour. At about 3 MB per full-resolution frame that's about **1 GB/hour**. The panel shows the estimate from your measured frame size. Size `maxCacheMB` and the SD card for the longest offline stretch you expect.
 
-## 6. Auto mode
+## 7. Auto mode
 
 One comparison on one path, evaluated both in the browser (websocket subscription, which drives capture) and on the server (shown in `/status` for cross-checking):
 
@@ -111,7 +129,7 @@ To test by hand, send a delta from any read/write client:
 {"context":"vessels.self","updates":[{"values":[{"path":"navigation.state","value":"sailing"}]}]}
 ```
 
-## 7. Google Drive
+## 8. Google Drive
 
 The plugin uses the OAuth **device flow** with the `drive.file` scope. The app can only see files it creates. Google's docs list `drive.file` as allowed for the device flow and as a non-sensitive scope.
 
@@ -139,14 +157,18 @@ A public npm package can't keep a client secret confidential, which is why you b
   2026-11-03_093012/
     2026-11-03T16-30-12-345Z.jpg
     2026-11-03T16-30-12-345Z.json
+  videos/                      videos saved from the gallery
 ```
 
-## 8. On the Pi
+## 9. On the Pi
 
 ```
 <storagePath>/                 default <plugin data dir>/frames
   queue/<session>/*.jpg|json   waiting for upload (the filesystem is the queue)
   uploaded/<session>/...       after upload, in move/keep modes
+  thumbs/<session>/*.jpg       gallery thumbnails (*.hd.jpg: HD proxies), never uploaded
+  videos/*.mp4                 videos saved from the gallery (kept until you delete them)
+  queue/videos/, uploaded/videos/   hard links to those videos for the Drive upload
 ```
 
 - Writes are atomic (temp file, fsync, rename). `POST /frames` responds once the frame is on disk. A frame is identified by session plus capture timestamp, so a client retry after a lost response returns `200 duplicate` instead of storing a second copy.
@@ -158,24 +180,26 @@ A public npm package can't keep a client secret confidential, which is why you b
 - `minFreeDiskMB` (default 500): below this, frames are rejected with HTTP 507 and the dot turns yellow.
 - `maxCacheMB` (default 1024) caps queued plus uploaded files. In `move` mode the oldest uploaded files are evicted first, since they're already in Drive. Capture stops only when *queued* frames alone fill the cap, and it resumes on its own once uploads catch up. In `keep` mode nothing is evicted, so the cap eventually stops capture. Set `maxCacheMB` to 0 for no cap.
 - With Drive disabled, frames stay in `queue/` until the cache cap.
+- Saved videos are hard-linked into `queue/videos/` for upload, so they take no extra space, and pruning or eviction only removes the link. They never count toward the frame cache cap, so a large video can't stop capture.
 
 ### Uploader behavior
 
-- Every `uploadIntervalSeconds` (default 60), the uploader sends queued files oldest first, `uploadConcurrency` at a time. Files over 5 MB use a resumable upload.
+- Every `uploadIntervalSeconds` (default 60), the uploader sends queued files oldest first, `uploadConcurrency` at a time. Files over 5 MB use a resumable upload streamed from disk.
+- Drive deletions requested in the gallery are queued in `drive-deletes.json` and run at the start of each pass: files are found by their `appProperties` key, whole sessions by folder, and moved to the Drive trash.
 - A full Drive (403 `storageQuotaExceeded`) stops the pass, shows `drive_full` in status and retries every 15 minutes.
 - Network failures and Google 5xx errors stop the pass and back off exponentially, up to 15 minutes. Rate limits (429, or 403 `rateLimitExceeded`) back off with jitter and honor `Retry-After`. On a 401 the uploader refreshes the token once. If the refresh fails, status shows `needs_auth`.
 - No duplicates after a crash: before each upload the plugin records the file in `inflight.json`. Files left there after a crash or a dropped connection are looked up in Drive by `appProperties` before being uploaded again. Normal uploads skip that extra call.
 - Folder IDs are cached in `drive-folders.json`. If you delete a folder in Drive, the 404 clears the cache and the folder is recreated.
 - The uploader sits behind a small interface (`init`, `ensureFolder`, `exists`, `upload`) in `src/drive/target.js`, so S3 or WebDAV targets can be added.
 
-## 9. Signal K security
+## 10. Signal K security
 
 On Signal K 2.x, plugin routes are **admin-only unless the plugin declares otherwise**. This plugin declares:
 
 | Route | Needs |
 |---|---|
-| `GET /config/client`, `/status`, `/mode`, `/drive/auth/poll` | any logged-in user (or `allow_readonly`) |
-| `PUT /mode`, `POST /frames`, `POST /drive/auth/start`, `/drive/auth/revoke`, `/drive/upload-now` | **read/write** or admin |
+| `GET /config/client`, `/status`, `/mode`, `/drive/auth/poll`, `/sessions…`, `/videos…` | any logged-in user (or `allow_readonly`) |
+| `PUT /mode`, `POST /frames`, `/thumbs`, `/videos`, deletes, `POST /drive/auth/start`, `/drive/auth/revoke`, `/drive/upload-now` | **read/write** or admin |
 
 Log in on the tablet as a **read/write** user, or approve it as a read/write device. Freeboard and KIP sign in with the same server session cookie, which the extension and the page reuse for HTTP and the websocket. Give the tablet a long session: set token expiration to `NEVER` or several months under **Security → Settings**, otherwise capture stops when the login expires. The page and extension files are public, as the plotter-extension spec requires; Freeboard only *discovers* the extension through the authenticated resources API. If the tablet isn't logged in, the status says so.
 
@@ -187,7 +211,7 @@ I verified this on signalk-server 2.35.1:
 | readonly | 200 | 401 |
 | read/write | 200 | 200/201 |
 
-## 10. Signal K output
+## 11. Signal K output
 
 When `publishDeltas` is on, the plugin publishes:
 
@@ -212,12 +236,22 @@ All routes are under `/plugins/signalk-tablet-camera-timelapse/`. The Freeboard 
 | GET | `/drive/auth/poll` | auth state (the plugin does the polling) |
 | POST | `/drive/auth/revoke` | revokes and deletes the token |
 | POST | `/drive/upload-now` | runs an upload pass now |
+| POST | `/thumbs?session=&ts=&kind=thumb\|hd` | gallery thumbnail or HD proxy from the capture engine |
+| GET | `/sessions` | sessions and saved videos on the Pi |
+| GET | `/sessions/:id` | one session's frames with time, state and sidecar summary |
+| GET | `/sessions/:id/frames/:name?size=thumb\|hd\|full` | a frame; `thumb`/`hd` fall back to `full`. `&download=1` for an attachment |
+| POST | `/sessions/:id/delete` | `{"frames": [names], "drive": bool}` |
+| DELETE | `/sessions/:id?drive=1` | delete a whole session (and trash its Drive folder) |
+| GET | `/videos`, `/videos/:name` | list or fetch saved videos |
+| POST | `/videos?name=` | raw `video/mp4` or `video/webm` body, streamed to disk, queued for Drive |
+| DELETE | `/videos/:name?drive=1` | delete a saved video (and its Drive copy) |
 
 ## Tablet notes and open items
 
 - **Still resolution.** The engine prefers `ImageCapture.takePhoto()` at the chosen size and falls back to grabbing a frame from the video stream into a canvas. The panel's **Test shot** reports the real size, the method used (`takePhoto` or `canvas`) and the latency. Use it on the Tab Active4 Pro to confirm `takePhoto` gives full sensor resolution in Chrome. `jpegQuality` only applies when the browser encodes the image (the canvas fallback). `takePhoto` JPEGs come from the camera pipeline as they are.
 - **Camera inside Freeboard and KIP iframes.** Neither app's iframes set `allow="camera"`, and none need to: the server sends no Permissions-Policy, so Chrome's default allows the camera in same-origin frames, Freeboard's sandboxed extension frames included. I tested this in Chromium with permission already granted. The first-time permission prompt from inside the hidden Freeboard runtime still needs a check on the tablet. If it doesn't appear, grant the camera once from the standalone page at `/signalk-tablet-camera-timelapse/`; the permission is per origin, so Freeboard then has it too.
 - **Night mode.** Camera previews are dimmed in Freeboard and KIP night mode.
+- **Video export on the tablet.** Tested with Chromium's H.264 encoder (`avc1.640033`). Chrome on Android normally has a hardware H.264 encoder; if not, the gallery falls back to VP9 or says no encoder fits and suggests a smaller size. Check one 1080p export on the Tab Active4 Pro.
 - **Power.** The camera stays open in On and Auto modes, including while Auto waits, so focus and exposure stay settled. In Off mode, or while the page is hidden, the camera is closed.
 
 ## Development
@@ -228,7 +262,7 @@ npm test        # node:test: Auto comparator, storage, uploader, Drive client, E
 npm run lint    # syntax check, including the browser ES modules
 ```
 
-Browser code has no build step. `public/js/core/` holds the host-agnostic engine, camera, protocol and shared UI; `public/js/hosts/` the Freeboard and KIP adapters. `public/vendor/plotterext-bus/` is the ES module build of [`signalk-plotterext-bus`](https://github.com/joelkoz/signalk-plotterext-bus) (MIT, version in `VERSION`).
+Browser code has no build step. `public/js/core/` holds the host-agnostic engine, camera, protocol and shared UI; `public/js/hosts/` the Freeboard and KIP adapters. `public/vendor/` holds the ES module builds of [`signalk-plotterext-bus`](https://github.com/joelkoz/signalk-plotterext-bus) (MIT) and [`mp4-muxer`](https://github.com/Vanilagy/mp4-muxer) (MIT), each with its `VERSION` and `LICENSE`.
 
 Run it against a local server by symlinking this repo into `~/.signalk/node_modules/` and adding it to `~/.signalk/package.json`.
 

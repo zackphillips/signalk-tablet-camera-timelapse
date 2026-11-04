@@ -21,6 +21,7 @@
     "appIcon": "./icons/icon-192.png",
     "screenshots": [
       "./screenshots/freeboard-panel.png",
+      "./screenshots/gallery.png",
       "./screenshots/kip.png"
     ]
   },

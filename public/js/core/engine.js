@@ -247,6 +247,7 @@ export async function startEngine ({ host }) {
       S.lastCaptureBytes = f.blob.size
       try {
         const r = await API.uploadFrame(frame)
+        if (r && !r.duplicate) sendGalleryCopies(frame)
         S.sessionFrames++
         prefs.set('session', { id: frame.session, lastAt: Date.now() })
         S.uploadError = null
@@ -272,6 +273,15 @@ export async function startEngine ({ host }) {
     }
   }
 
+  // Thumbnail + HD proxy for the gallery, after the frame itself is safe.
+  async function sendGalleryCopies (frame) {
+    const hdWidth = S.cfg && S.cfg.proxyWidth > 0 && (!frame.w || frame.w > S.cfg.proxyWidth) ? S.cfg.proxyWidth : 0
+    const c = await cam.galleryCopies(frame.blob, hdWidth)
+    if (!c) return
+    await API.uploadThumb({ session: frame.session, ts: frame.ts, blob: c.thumb })
+    if (c.hd) await API.uploadThumb({ session: frame.session, ts: frame.ts, blob: c.hd, kind: 'hd' })
+  }
+
   async function testShot (id) {
     const t0 = performance.now()
     try {
@@ -281,6 +291,7 @@ export async function startEngine ({ host }) {
       const f = await cam.takeFrame()
       const ms = Math.round(performance.now() - t0)
       const r = await API.uploadFrame({ ...f, ts, session: 'test-shots', mode: 'test', device: cam.label })
+      sendGalleryCopies({ ...f, ts, session: 'test-shots' })
       S.lastCaptureBytes = f.blob.size
       ch.postMessage({ t: 'testResult', id, ok: true, blob: f.blob, w: f.w, h: f.h, method: f.method, ms, file: r.file, bytes: f.blob.size })
       refreshStatus()

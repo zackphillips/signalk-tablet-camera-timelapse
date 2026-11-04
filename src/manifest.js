@@ -15,12 +15,13 @@ function buildManifest ({ version, base }) {
     // The capture engine needs a background runtime. Everything else is a
     // nicety the extension does without on a host that lacks it.
     requires: ['background.iframe'],
-    optional: ['buttons', 'buttons.decorations', 'panels.iframe', 'panels.state', 'widgets', 'nightMode'],
+    optional: ['buttons', 'buttons.decorations', 'panels.iframe', 'panels.state', 'widgets', 'nightMode', 'ui', 'windows'],
     background: [
       { id: 'engine', title: 'Timelapse capture', type: 'iframe', url: `${base}fsk/runtime.html` }
     ],
     panels: [
-      { id: 'settings', title: 'Timelapse', type: 'iframe', url: `${base}fsk/panel.html`, lifecycle: 'onOpen' }
+      { id: 'settings', title: 'Timelapse', type: 'iframe', url: `${base}fsk/panel.html`, lifecycle: 'onOpen' },
+      { id: 'gallery', title: 'Timelapse photos', type: 'iframe', url: `${base}fsk/gallery.html`, lifecycle: 'onOpen' }
     ],
     buttons: [
       {

@@ -19,4 +19,10 @@ if (client.hasCapability('panels.state')) {
   } catch (e) { /* assume visible */ }
 }
 
-mountSettings(document.getElementById('root'), createEngineClient(), { previewActive: () => visible })
+// The gallery opens in a floating window where Freeboard supports them,
+// otherwise in the drawer in place of this panel.
+const openGallery = () => client.hasCapability('windows')
+  ? client.call('ui.openWindow', { panel: 'gallery', title: 'Timelapse photos', geometry: { anchor: 'center', width: '92%', height: '92%' }, single: true })
+  : client.call('ui.openPanel', { panel: 'gallery' })
+
+mountSettings(document.getElementById('root'), createEngineClient(), { previewActive: () => visible, openGallery })

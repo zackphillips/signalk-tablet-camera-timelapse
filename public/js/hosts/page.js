@@ -28,6 +28,11 @@ const el = {
   settings: document.getElementById('settings'),
   back: document.getElementById('back')
 }
+// A new tab: KIP tiles are too small for the gallery. Same tab if popups are blocked.
+const openGallery = () => {
+  const url = new URL('gallery.html', location.href).href
+  if (!window.open(url, '_blank')) location.href = url
+}
 let showFull = false
 let settingsMounted = false
 
@@ -43,7 +48,7 @@ function layout () {
   el.full.hidden = compact
   el.back.hidden = !(small() && showFull)
   if (!compact && !settingsMounted) {
-    mountSettings(el.settings, client, { previewActive: () => !el.full.hidden })
+    mountSettings(el.settings, client, { previewActive: () => !el.full.hidden, openGallery })
     settingsMounted = true
   }
 }

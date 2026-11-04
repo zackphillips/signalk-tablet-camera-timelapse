@@ -27,6 +27,15 @@ export const drivePoll = () => api('/drive/auth/poll')
 export const driveRevoke = () => api('/drive/auth/revoke', { method: 'POST' })
 export const uploadNow = () => api('/drive/upload-now', { method: 'POST' })
 
+/** Gallery thumbnail for a frame. Best effort: one try, failures ignored. */
+export async function uploadThumb ({ session, ts, blob, kind = 'thumb' }) {
+  try {
+    await fetch(`${BASE}/thumbs?${new URLSearchParams({ session, ts, kind })}`, {
+      method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'image/jpeg' }, body: blob
+    })
+  } catch (e) { /* the gallery falls back to the full frame */ }
+}
+
 const UPLOAD_RETRIES = 3
 const sleep = (ms) => new Promise(r => setTimeout(r, ms))
 

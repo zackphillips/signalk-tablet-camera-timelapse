@@ -15,7 +15,7 @@ const { atomicWrite } = require('./storage')
 
 const MAX_BACKOFF_MS = 15 * 60 * 1000
 
-const MIME = { '.jpg': 'image/jpeg', '.json': 'application/json' }
+const MIME = { '.jpg': 'image/jpeg', '.json': 'application/json', '.mp4': 'video/mp4', '.webm': 'video/webm' }
 
 class InflightLog {
   constructor (file) {
@@ -37,11 +37,34 @@ class InflightLog {
   }
 }
 
+/**
+ * Drive deletions requested from the gallery, persisted so they survive being
+ * offline or a restart. Entries: { key } for one file (by localKey), or
+ * { folder } for a whole session folder.
+ */
+class DeleteQueue {
+  constructor (file) {
+    this.file = file
+    try { this.items = JSON.parse(fs.readFileSync(file, 'utf8')) } catch (e) { this.items = [] }
+  }
+
+  get length () { return this.items.length }
+  async add (entries) { this.items.push(...entries); await this.save() }
+  async shift () { this.items.shift(); await this.save() }
+  save () {
+    const write = () => atomicWrite(this.file, JSON.stringify(this.items))
+    this.saving = (this.saving || Promise.resolve()).then(write, write)
+    return this.saving
+  }
+}
+
 class Uploader {
   constructor ({ storage, target, dataDir, intervalSeconds = 60, concurrency = 1, log, isReady, onPass, random = Math.random, now = Date.now }) {
     this.storage = storage
     this.target = target
     this.inflight = new InflightLog(path.join(dataDir, 'inflight.json'))
+    this.deletes = new DeleteQueue(path.join(dataDir, 'drive-deletes.json'))
+    this.deletedTotal = 0
     this.intervalMs = Math.max(5, intervalSeconds) * 1000
     this.concurrency = Math.max(1, Math.floor(concurrency))
     this.log = log || { debug () {}, error () {} }
@@ -101,8 +124,37 @@ class Uploader {
       nextRunAt: this.nextRunAt ? new Date(this.nextRunAt).toISOString() : null,
       consecutiveFailures: this.failures,
       uploadedTotal: this.uploadedTotal,
+      pendingDeletes: this.deletes.length,
+      deletedTotal: this.deletedTotal,
       lastPass: this.lastPass,
       lastError: this.lastError
+    }
+  }
+
+  /** Queue Drive deletions and forget any half-finished uploads of those files. */
+  async queueDeletes (entries) {
+    if (!entries.length) return
+    for (const e of entries) if (e.key && this.inflight.has(e.key)) await this.inflight.remove(e.key)
+    await this.deletes.add(entries)
+    this.kick()
+  }
+
+  /** Work through queued deletions. Throws on network/auth/rate-limit errors. */
+  async processDeletes () {
+    while (this.deletes.length && !this.stopped) {
+      const e = this.deletes.items[0]
+      try {
+        const ids = e.folder ? [await this.target.findSessionFolder(e.folder)].filter(Boolean) : await this.target.findByKey(e.key)
+        for (const id of ids) await this.target.trash(id)
+        if (e.folder) await this.target.invalidate(e.folder)
+        this.deletedTotal += ids.length
+      } catch (err) {
+        // Network, auth and rate limits: keep the entry and retry next pass.
+        if (!(err instanceof HttpError)) throw err
+        // Anything else (already gone, not ours) will not get better: drop it.
+        if (err.status !== 404) this.lastError = `Drive delete ${e.key || e.folder}: ${err.message}`
+      }
+      await this.deletes.shift()
     }
   }
 
@@ -148,6 +200,7 @@ class Uploader {
     const counts = { uploaded: 0, skippedExisting: 0, failed: 0 }
     let fatal = null
     try {
+      if (this.deletes.length && this.target.trash) await this.processDeletes()
       const items = await this.storage.scanQueue()
       let i = 0
       const worker = async () => {
@@ -211,4 +264,4 @@ class Uploader {
   }
 }
 
-module.exports = { Uploader, InflightLog, MAX_BACKOFF_MS }
+module.exports = { Uploader, InflightLog, DeleteQueue, MAX_BACKOFF_MS }

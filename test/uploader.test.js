@@ -172,3 +172,45 @@ test('Drive full stops the pass and waits the max backoff', async () => {
   assert.strictEqual(target.calls.upload, 1)
   assert.strictEqual((await storage.scanQueue()).length, 4)
 })
+
+test('Drive deletes: queued, survive restart, trash by key and by folder', async () => {
+  const { d, storage, target, up } = await setup(0)
+  target.trashed = []
+  target.findByKey = async (k) => (k === 'gone/x.jpg' ? [] : ['id-' + k])
+  target.findSessionFolder = async (s) => 'folder-' + s
+  target.trash = async (id) => { target.trashed.push(id) }
+  up.kick = () => {}
+  target.failNext.push({ err: new NetworkError('offline') }) // unused by deletes
+  await up.queueDeletes([{ key: 's1/a.jpg' }, { key: 'gone/x.jpg' }, { folder: 's2' }])
+  // A restart in between keeps the queue.
+  const up2 = new Uploader({ storage, target, dataDir: d, intervalSeconds: 60 })
+  up2.stopped = false
+  up2.schedule = () => {}
+  assert.strictEqual(up2.deletes.length, 3)
+  await up2.runPass()
+  assert.deepStrictEqual(target.trashed, ['id-s1/a.jpg', 'folder-s2'])
+  assert.strictEqual(up2.deletes.length, 0)
+  assert.strictEqual(up2.status().deletedTotal, 2)
+})
+
+test('Drive deletes: network failure keeps the entry for the next pass', async () => {
+  const { target, up } = await setup(0)
+  let calls = 0
+  target.findByKey = async () => { calls++; if (calls === 1) throw new NetworkError('offline'); return ['id'] }
+  target.trash = async () => {}
+  up.kick = () => {}
+  await up.queueDeletes([{ key: 's1/a.jpg' }])
+  await up.runPass()
+  assert.strictEqual(up.state, 'offline')
+  assert.strictEqual(up.deletes.length, 1)
+  await up.runPass()
+  assert.strictEqual(up.deletes.length, 0)
+})
+
+test('queueDeletes forgets half-finished uploads of those files', async () => {
+  const { up } = await setup(0)
+  up.kick = () => {}
+  await up.inflight.add('s1/a.jpg')
+  await up.queueDeletes([{ key: 's1/a.jpg' }])
+  assert.ok(!up.inflight.has('s1/a.jpg'))
+})

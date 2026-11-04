@@ -51,6 +51,13 @@ function buildSchema () {
         default: 'move'
       },
       keepUploadedDays: { type: 'number', title: 'Keep uploaded files (days, move mode)', minimum: 0, default: 7 },
+      proxyWidth: {
+        type: 'number',
+        title: 'Gallery HD proxy width (px)',
+        description: 'The tablet also saves a reduced copy of each frame on the Pi (never uploaded) so videos up to this width export without pulling full-size frames over Wi-Fi. About 400 KB per frame at 1920. 0 turns it off.',
+        minimum: 0,
+        default: 1920
+      },
       writeExif: { type: 'boolean', title: 'Write GPS and time into JPEG EXIF', default: true },
       publishDeltas: { type: 'boolean', title: 'Publish status to Signal K (plugins.tabletCameraTimelapse.*)', default: true },
       uploadIntervalSeconds: { type: 'number', title: 'Upload pass interval (s)', minimum: 5, default: 60 },
@@ -84,6 +91,7 @@ const DEFAULTS = {
   maxCacheMB: 1024,
   afterUpload: 'move',
   keepUploadedDays: 7,
+  proxyWidth: 1920,
   writeExif: true,
   publishDeltas: true,
   uploadIntervalSeconds: 60,

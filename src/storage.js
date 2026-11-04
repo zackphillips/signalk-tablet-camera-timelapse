@@ -6,10 +6,24 @@ const path = require('path')
 const crypto = require('crypto')
 
 const SESSION_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/
-const FRAME_EXT = ['.jpg', '.json']
+const FRAME_EXT = ['.jpg', '.json', '.mp4', '.webm']
+// Exported videos are queued for Drive under this pseudo-session. Frames may
+// not use it.
+const VIDEO_SESSION = 'videos'
+const VIDEO_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,100}\.(mp4|webm)$/
 
 function isValidSessionId (s) {
   return typeof s === 'string' && SESSION_RE.test(s)
+}
+
+function isValidVideoName (n) {
+  return typeof n === 'string' && VIDEO_NAME_RE.test(n) && !n.includes('..')
+}
+
+/** 2026-11-03T17-31-00-123Z -> 2026-11-03T17:31:00.123Z (null if not a frame name) */
+function frameTime (base) {
+  const m = /^(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})-(\d{3})Z$/.exec(base)
+  return m ? `${m[1]}T${m[2]}:${m[3]}:${m[4]}.${m[5]}Z` : null
 }
 
 /** 2026-11-03T17:31:00.123Z -> 2026-11-03T17-31-00-123Z (sortable, filename-safe) */
@@ -63,17 +77,21 @@ class Storage {
     this.root = storagePath
     this.queueDir = path.join(storagePath, 'queue')
     this.uploadedDir = path.join(storagePath, 'uploaded')
+    this.thumbsDir = path.join(storagePath, 'thumbs')
+    this.videosDir = path.join(storagePath, 'videos')
     this.afterUploadMode = afterUpload
     this.keepUploadedDays = keepUploadedDays
     this.minFreeBytes = minFreeDiskMB * 1024 * 1024
     this.maxCacheBytes = maxCacheMB * 1024 * 1024
     this.log = log || { debug () {}, error () {} }
-    this.stats = { queueCount: 0, queueBytes: 0, uploadedCount: 0, uploadedBytes: 0, oldestQueued: null, scannedAt: null }
+    this.stats = { queueCount: 0, queueBytes: 0, videoQueueBytes: 0, uploadedCount: 0, uploadedBytes: 0, oldestQueued: null, scannedAt: null }
   }
 
   async init () {
     await fsp.mkdir(this.queueDir, { recursive: true })
     await fsp.mkdir(this.uploadedDir, { recursive: true })
+    await fsp.mkdir(this.thumbsDir, { recursive: true })
+    await fsp.mkdir(this.videosDir, { recursive: true })
     await this.cleanupTemp()
     await this.refreshStats()
   }
@@ -81,7 +99,10 @@ class Storage {
   /** Remove temp files left by a crash mid-write. */
   async cleanupTemp () {
     let n = 0
-    for (const base of [this.queueDir, this.uploadedDir]) {
+    for (const f of await listDir(this.videosDir)) {
+      if (f.name.startsWith('.tmp-')) { await fsp.rm(path.join(this.videosDir, f.name), { force: true }); n++ }
+    }
+    for (const base of [this.queueDir, this.uploadedDir, this.thumbsDir]) {
       for (const s of await listDir(base)) {
         if (!s.isDirectory()) continue
         for (const f of await listDir(path.join(base, s.name))) {
@@ -116,7 +137,9 @@ class Storage {
     const free = this.freeBytes()
     if (free !== null && free < this.minFreeBytes) return 'disk_low'
     if (this.maxCacheBytes > 0) {
-      const used = this.afterUploadMode === 'move' ? this.stats.queueBytes : this.cacheBytes()
+      // Exported videos waiting for Drive never stop capture.
+      const frames = this.stats.queueBytes - this.stats.videoQueueBytes
+      const used = this.afterUploadMode === 'move' ? frames : this.cacheBytes() - this.stats.videoQueueBytes
       if (used >= this.maxCacheBytes) return 'cache_full'
     }
     return null
@@ -138,7 +161,7 @@ class Storage {
    * Returns { base, jpgPath, duplicate }.
    */
   async writeFrame ({ sessionId, captureDate, jpeg, sidecar }) {
-    if (!isValidSessionId(sessionId)) throw new Error('invalid session id')
+    if (!isValidSessionId(sessionId) || sessionId === VIDEO_SESSION) throw new Error('invalid session id')
     const dir = path.join(this.queueDir, sessionId)
     await fsp.mkdir(dir, { recursive: true })
     const base = frameBaseName(captureDate)
@@ -189,6 +212,7 @@ class Storage {
     this.stats = {
       queueCount: q.length,
       queueBytes: q.reduce((a, b) => a + b.size, 0),
+      videoQueueBytes: q.filter(i => i.session === VIDEO_SESSION).reduce((a, b) => a + b.size, 0),
       uploadedCount: u.length,
       uploadedBytes: u.reduce((a, b) => a + b.size, 0),
       oldestQueued: q.length ? q[0].key : null,
@@ -204,6 +228,7 @@ class Storage {
    *  keep:   move to uploaded/<session>/, never pruned
    */
   async afterUpload (item) {
+    if (item.session === VIDEO_SESSION) this.stats.videoQueueBytes -= item.size
     if (this.afterUploadMode === 'delete') {
       await fsp.rm(item.path, { force: true })
       this.stats.queueBytes -= item.size
@@ -246,6 +271,7 @@ class Storage {
     }
     await this.removeEmptyDirs(this.uploadedDir)
     await this.removeEmptyDirs(this.queueDir, 3600 * 1000)
+    await this.sweepThumbs()
     await this.refreshStats()
     return n
   }
@@ -266,9 +292,226 @@ class Storage {
       n++
     }
     await this.removeEmptyDirs(this.uploadedDir)
+    await this.sweepThumbs()
     await this.refreshStats()
     return n
   }
+
+  // ---------- gallery ----------
+
+  /** Where a frame's files live now: queue first, then uploaded. */
+  frameFile (session, base, ext = '.jpg') {
+    for (const dir of [this.queueDir, this.uploadedDir]) {
+      const p = path.join(dir, session, base + ext)
+      if (fs.existsSync(p)) return p
+    }
+    return null
+  }
+
+  /** kind 'thumb' (320 px) or 'hd' (1920 px proxy for video export). */
+  thumbFile (session, base, kind = 'thumb') {
+    const p = path.join(this.thumbsDir, session, base + (kind === 'hd' ? '.hd.jpg' : '.jpg'))
+    return fs.existsSync(p) ? p : null
+  }
+
+  async writeThumb ({ sessionId, captureDate, jpeg, kind = 'thumb' }) {
+    if (!isValidSessionId(sessionId) || sessionId === VIDEO_SESSION) throw new Error('invalid session id')
+    const dir = path.join(this.thumbsDir, sessionId)
+    await fsp.mkdir(dir, { recursive: true })
+    const base = frameBaseName(captureDate)
+    await atomicWrite(path.join(dir, base + (kind === 'hd' ? '.hd.jpg' : '.jpg')), jpeg)
+    return base
+  }
+
+  /** Frames of every session on the Pi (queued or uploaded), newest session first. */
+  async listSessions () {
+    const by = new Map()
+    for (const [dir, state] of [[this.queueDir, 'queued'], [this.uploadedDir, 'uploaded']]) {
+      for (const it of await this.scanDir(dir)) {
+        if (it.session === VIDEO_SESSION) continue
+        let s = by.get(it.session)
+        if (!s) { s = { id: it.session, frames: 0, queued: 0, uploaded: 0, bytes: 0, first: null, last: null }; by.set(it.session, s) }
+        s.bytes += it.size
+        if (!it.name.endsWith('.jpg')) continue
+        const base = it.name.slice(0, -4)
+        s.frames++
+        s[state]++
+        if (!s.first || base < s.first) s.first = base
+        if (!s.last || base > s.last) s.last = base
+      }
+    }
+    return [...by.values()]
+      .filter(s => s.frames > 0)
+      .map(s => ({ ...s, start: frameTime(s.first), end: frameTime(s.last) }))
+      .sort((a, b) => (a.first < b.first ? 1 : -1))
+  }
+
+  /** One session's frames in time order, with a navigation summary from each sidecar. */
+  async listFrames (session) {
+    if (!isValidSessionId(session) || session === VIDEO_SESSION) return null
+    const frames = new Map()
+    for (const [dir, state] of [[this.queueDir, 'queued'], [this.uploadedDir, 'uploaded']]) {
+      for (const f of await listDir(path.join(dir, session))) {
+        if (!f.isFile() || !f.name.endsWith('.jpg')) continue
+        const base = f.name.slice(0, -4)
+        if (frames.has(base)) continue
+        let size = 0
+        try { size = (await fsp.stat(path.join(dir, session, f.name))).size } catch (e) { continue }
+        frames.set(base, {
+          name: base,
+          time: frameTime(base),
+          state,
+          bytes: size,
+          thumb: fs.existsSync(path.join(this.thumbsDir, session, base + '.jpg')),
+          hd: fs.existsSync(path.join(this.thumbsDir, session, base + '.hd.jpg'))
+        })
+      }
+    }
+    const out = [...frames.values()].sort((a, b) => (a.name < b.name ? -1 : 1))
+    for (const fr of out) {
+      const side = this.frameFile(session, fr.name, '.json')
+      if (!side) continue
+      try {
+        const j = JSON.parse(await fsp.readFile(side, 'utf8'))
+        const n = j.navigation || {}
+        const v = (k) => (n[k] && typeof n[k].value === 'number' ? n[k].value : null)
+        fr.w = j.image && j.image.width
+        fr.h = j.image && j.image.height
+        fr.sog = v('speedOverGround')
+        fr.cog = v('courseOverGroundTrue')
+        fr.heading = v('headingTrue')
+        fr.aws = v('windSpeedApparent')
+        fr.tws = v('windSpeedTrue')
+        if (n.position && n.position.value) fr.position = n.position.value
+      } catch (e) { /* sidecar unreadable: skip the extras */ }
+    }
+    return out
+  }
+
+  /**
+   * Delete frames (jpg, sidecar, thumbnail) from queue and uploaded.
+   * Returns the localKeys of the removed files, for Drive deletion.
+   */
+  async deleteFrames (session, bases) {
+    if (!isValidSessionId(session) || session === VIDEO_SESSION) throw new Error('invalid session id')
+    const keys = []
+    for (const base of bases) {
+      if (typeof base !== 'string' || !frameTime(base)) continue
+      for (const ext of ['.jpg', '.json']) {
+        for (const dir of [this.queueDir, this.uploadedDir]) {
+          const p = path.join(dir, session, base + ext)
+          try { await fsp.rm(p); keys.push(`${session}/${base}${ext}`) } catch (e) { /* not there */ }
+        }
+      }
+      await fsp.rm(path.join(this.thumbsDir, session, base + '.jpg'), { force: true })
+      await fsp.rm(path.join(this.thumbsDir, session, base + '.hd.jpg'), { force: true })
+    }
+    await this.removeEmptyDirs(this.queueDir)
+    await this.removeEmptyDirs(this.uploadedDir)
+    await this.removeEmptyDirs(this.thumbsDir)
+    await this.refreshStats()
+    return [...new Set(keys)]
+  }
+
+  async deleteSession (session) {
+    const frames = await this.listFrames(session)
+    if (!frames) throw new Error('invalid session id')
+    const keys = await this.deleteFrames(session, frames.map(f => f.name))
+    for (const dir of [this.queueDir, this.uploadedDir, this.thumbsDir]) {
+      await fsp.rm(path.join(dir, session), { recursive: true, force: true })
+    }
+    await this.refreshStats()
+    return keys
+  }
+
+  /** Remove thumbnails whose frame is gone (pruned, evicted or deleted after upload). */
+  async sweepThumbs () {
+    let n = 0
+    for (const s of await listDir(this.thumbsDir)) {
+      if (!s.isDirectory()) continue
+      for (const f of await listDir(path.join(this.thumbsDir, s.name))) {
+        if (!f.name.endsWith('.jpg')) continue
+        const base = f.name.replace(/(\.hd)?\.jpg$/, '')
+        if (!this.frameFile(s.name, base)) {
+          await fsp.rm(path.join(this.thumbsDir, s.name, f.name), { force: true })
+          n++
+        }
+      }
+    }
+    await this.removeEmptyDirs(this.thumbsDir, 3600 * 1000)
+    return n
+  }
+
+  // ---------- exported videos ----------
+
+  /**
+   * Store an exported video from a request stream (never buffered whole).
+   * With forUpload, hard-link it into queue/videos/ so the uploader sends it
+   * to Drive; the link costs no extra disk and its afterUpload handling never
+   * touches the copy in videos/.
+   */
+  async saveVideo (name, stream, { limit, forUpload }) {
+    if (!isValidVideoName(name)) throw Object.assign(new Error('invalid video name'), { status: 400 })
+    const dest = path.join(this.videosDir, name)
+    if (fs.existsSync(dest)) throw Object.assign(new Error('a video with that name exists'), { status: 409 })
+    const tmp = path.join(this.videosDir, `.tmp-${process.pid}-${crypto.randomBytes(6).toString('hex')}`)
+    let size = 0
+    await new Promise((resolve, reject) => {
+      const out = fs.createWriteStream(tmp)
+      let failed = false
+      const fail = (e) => { if (failed) return; failed = true; out.destroy(); reject(e) }
+      stream.on('data', (c) => {
+        size += c.length
+        if (size > limit) { stream.unpipe(out); stream.resume(); fail(Object.assign(new Error('video too large'), { status: 413 })) }
+      })
+      stream.on('error', fail)
+      out.on('error', fail)
+      out.on('finish', () => { if (!failed) resolve() })
+      stream.pipe(out)
+    }).catch(async (e) => { await fsp.rm(tmp, { force: true }); throw e })
+    const fh = await fsp.open(tmp, 'r+')
+    try { await fh.sync() } finally { await fh.close() }
+    await fsp.rename(tmp, dest)
+    if (forUpload) {
+      const qdir = path.join(this.queueDir, VIDEO_SESSION)
+      await fsp.mkdir(qdir, { recursive: true })
+      try { await fsp.link(dest, path.join(qdir, name)) } catch (e) { await fsp.copyFile(dest, path.join(qdir, name)) }
+      this.stats.queueBytes += size
+      this.stats.videoQueueBytes += size
+      this.stats.queueCount++
+    }
+    return { name, bytes: size }
+  }
+
+  async listVideos () {
+    const out = []
+    for (const f of await listDir(this.videosDir)) {
+      if (!f.isFile() || !isValidVideoName(f.name)) continue
+      try {
+        const st = await fsp.stat(path.join(this.videosDir, f.name))
+        const queued = fs.existsSync(path.join(this.queueDir, VIDEO_SESSION, f.name))
+        const uploaded = fs.existsSync(path.join(this.uploadedDir, VIDEO_SESSION, f.name))
+        out.push({ name: f.name, bytes: st.size, created: new Date(st.mtimeMs).toISOString(), drive: queued ? 'queued' : (uploaded ? 'uploaded' : null) })
+      } catch (e) { /* raced */ }
+    }
+    return out.sort((a, b) => (a.created < b.created ? 1 : -1))
+  }
+
+  videoFile (name) {
+    if (!isValidVideoName(name)) return null
+    const p = path.join(this.videosDir, name)
+    return fs.existsSync(p) ? p : null
+  }
+
+  /** Delete a video and its upload link. Returns the localKey for Drive deletion. */
+  async deleteVideo (name) {
+    if (!isValidVideoName(name)) throw Object.assign(new Error('invalid video name'), { status: 400 })
+    for (const p of [path.join(this.videosDir, name), path.join(this.queueDir, VIDEO_SESSION, name), path.join(this.uploadedDir, VIDEO_SESSION, name)]) {
+      await fsp.rm(p, { force: true })
+    }
+    await this.refreshStats()
+    return `${VIDEO_SESSION}/${name}`
+  }
 }
 
-module.exports = { Storage, atomicWrite, frameBaseName, isValidSessionId, compareItems }
+module.exports = { Storage, atomicWrite, frameBaseName, frameTime, isValidSessionId, isValidVideoName, compareItems, VIDEO_SESSION }
