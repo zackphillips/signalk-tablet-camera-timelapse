@@ -22,6 +22,13 @@ export const setMode = (mode) => api('/mode', {
   headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify({ mode })
 })
+/** App settings stored on the Pi: { intervalSeconds, stamp }. null resets one to the plugin default. */
+export const getSettings = () => api('/settings')
+export const putSettings = (patch) => api('/settings', {
+  method: 'PUT',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify(patch)
+})
 export const driveStart = () => api('/drive/auth/start', { method: 'POST' })
 export const drivePoll = () => api('/drive/auth/poll')
 export const driveRevoke = () => api('/drive/auth/revoke', { method: 'POST' })

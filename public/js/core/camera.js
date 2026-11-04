@@ -1,6 +1,6 @@
 // Camera access for the capture engine: one stream, full-resolution stills via
-// ImageCapture.takePhoto() with a video-frame canvas fallback, and small
-// preview JPEGs for the settings UIs.
+// ImageCapture.takePhoto() with a video-frame canvas fallback, and gallery
+// copies of each still.
 
 import { prefs } from './prefs.js'
 
@@ -263,14 +263,6 @@ export function createCamera ({ onChange, jpegQuality = () => 0.85 }) {
     } catch (e) { return null }
   }
 
-  /** Small JPEG of the live stream for settings previews. */
-  async function previewFrame (maxW = 480) {
-    if (!C.stream) return null
-    const v = await videoEl()
-    const s = Math.min(1, maxW / v.videoWidth)
-    return toJpeg(v, Math.round(v.videoWidth * s), Math.round(v.videoHeight * s), 0.6)
-  }
-
   return {
     state: C,
     open,
@@ -278,7 +270,6 @@ export function createCamera ({ onChange, jpegQuality = () => 0.85 }) {
     setCamera,
     setResolution,
     takeFrame,
-    previewFrame,
     galleryCopies,
     get label () { return C.track ? C.track.label : '' },
     get usesImageCapture () { return !!C.imageCapture }

@@ -6,7 +6,7 @@ function buildSchema () {
   return {
     type: 'object',
     properties: {
-      intervalSeconds: { type: 'number', title: 'Capture interval (s)', minimum: 1, default: 10 },
+      intervalSeconds: { type: 'number', title: 'Capture interval (s)', description: 'Default. Changing the interval in the app overrides this until it is reset there.', minimum: 1, default: 10 },
       jpegQuality: {
         type: 'number',
         title: 'JPEG quality (0-1)',

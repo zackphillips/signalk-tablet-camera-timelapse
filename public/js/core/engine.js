@@ -7,12 +7,11 @@ import * as API from './api.js'
 import { createCamera } from './camera.js'
 import { prefs } from './prefs.js'
 import { openChannel, HEARTBEAT_MS } from './protocol.js'
+import { stampJpeg } from './stamp.js'
 
 const Auto = self.TimelapseAuto
 const BUFFER_MAX = 6
 const STATUS_POLL_MS = 10000
-const PREVIEW_HOLD_MS = 2500
-const PREVIEW_EVERY_MS = 500
 const log = (...a) => console.log('[timelapse]', ...a)
 
 function pad (n) { return String(n).padStart(2, '0') }
@@ -47,8 +46,6 @@ export async function startEngine ({ host }) {
   let timer = null
   let busy = false
   let wakeLock = null
-  let previewUntil = 0
-  let previewTimer = null
   let stopped = false
   const intervals = []
   const every = (fn, ms) => { const t = setInterval(fn, ms); intervals.push(t); return t }
@@ -107,42 +104,33 @@ export async function startEngine ({ host }) {
     switch (m.t) {
       case 'hello': broadcast(); break
       case 'refresh': await refreshStatus(); break
-      case 'preview':
-        previewUntil = Date.now() + PREVIEW_HOLD_MS
-        startPreview()
-        reconcile()
-        break
       case 'setCamera': await cam.setCamera(m.id); reconcile(); break
       case 'setResolution': await (m.choice ? cam.setResolution(m.choice) : cam.setResolution(m.w, m.h)); break
       case 'testShot': testShot(m.id); break
     }
   }
 
-  // ---------- preview frames ----------
-  function previewWanted () { return Date.now() < previewUntil }
-  function startPreview () {
-    if (previewTimer) return
-    previewTimer = setInterval(async () => {
-      if (!previewWanted()) {
-        clearInterval(previewTimer)
-        previewTimer = null
-        reconcile() // may close the camera again
-        return
-      }
-      try {
-        const blob = await cam.previewFrame()
-        if (blob) ch.postMessage({ t: 'frame', blob })
-      } catch (e) { /* camera reopening */ }
-    }, PREVIEW_EVERY_MS)
-  }
-
   // ---------- server ----------
   function autoConfigured () { return !!(S.cfg && S.cfg.auto && S.cfg.auto.configured) }
+
+  // Settings changed in the app reach us with the status (every 10 s, or at
+  // once when a UI sends 'refresh' after saving).
+  function applySettings (st) {
+    if (!st || !S.cfg) return
+    const intervalChanged = st.intervalSeconds !== S.cfg.intervalSeconds
+    S.cfg = { ...S.cfg, intervalSeconds: st.intervalSeconds, stamp: st.stamp }
+    if (intervalChanged && timer) {
+      clearInterval(timer)
+      timer = setInterval(captureTick, S.cfg.intervalSeconds * 1000)
+      log('interval now', S.cfg.intervalSeconds, 's')
+    }
+  }
 
   async function refreshStatus () {
     try {
       S.status = await API.getStatus()
       S.statusError = null
+      applySettings(S.status.settings)
       if (S.status.mode !== S.mode) {
         // Any deliberate mode change starts a fresh session folder.
         if (S.mode) prefs.set('session', null)
@@ -220,7 +208,7 @@ export async function startEngine ({ host }) {
     return document.visibilityState === 'visible' && window.isSecureContext && !blocked() && modeWantsCapture()
   }
   function wantStream () {
-    return document.visibilityState === 'visible' && (S.mode === 'on' || S.mode === 'auto' || previewWanted())
+    return document.visibilityState === 'visible' && (S.mode === 'on' || S.mode === 'auto')
   }
 
   // ---------- capture ----------
@@ -241,8 +229,9 @@ export async function startEngine ({ host }) {
     if (busy) { S.skipped++; return }
     busy = true
     try {
-      const ts = new Date().toISOString()
-      const f = await cam.takeFrame()
+      const at = new Date()
+      const ts = at.toISOString()
+      const f = await stamped(await cam.takeFrame(), at)
       const frame = { ...f, ts, session: S.sessionId, mode: S.mode, device: cam.label }
       S.lastCaptureAt = Date.now()
       S.lastCaptureBytes = f.blob.size
@@ -274,6 +263,20 @@ export async function startEngine ({ host }) {
     }
   }
 
+  // Timestamp burned into the frame when the app asks for it. A failure keeps
+  // the unstamped frame rather than losing it.
+  async function stamped (f, at) {
+    const pos = S.cfg && S.cfg.stamp
+    if (!pos || pos === 'off') return f
+    try {
+      const r = await stampJpeg(f.blob, at, pos, S.cfg.jpegQuality || 0.85)
+      return { ...f, blob: r.blob, w: r.w, h: r.h }
+    } catch (e) {
+      log('timestamp failed:', e.message)
+      return f
+    }
+  }
+
   // Thumbnail + HD proxy for the gallery, after the frame itself is safe.
   async function sendGalleryCopies (frame) {
     const hdWidth = S.cfg && S.cfg.proxyWidth > 0 && (!frame.w || frame.w > S.cfg.proxyWidth) ? S.cfg.proxyWidth : 0
@@ -288,8 +291,9 @@ export async function startEngine ({ host }) {
     try {
       while (busy) await new Promise(r => setTimeout(r, 100))
       busy = true
-      const ts = new Date().toISOString()
-      const f = await cam.takeFrame()
+      const at = new Date()
+      const ts = at.toISOString()
+      const f = await stamped(await cam.takeFrame(), at)
       const ms = Math.round(performance.now() - t0)
       const r = await API.uploadFrame({ ...f, ts, session: 'test-shots', mode: 'test', device: cam.label })
       sendGalleryCopies({ ...f, ts, session: 'test-shots' })
@@ -388,8 +392,7 @@ export async function startEngine ({ host }) {
     stopped = true
     intervals.forEach(clearInterval)
     if (timer) clearInterval(timer)
-    if (previewTimer) clearInterval(previewTimer)
-    timer = previewTimer = null
+    timer = null
     document.removeEventListener('visibilitychange', onVisibility)
     if (ws) { ws.onclose = null; try { ws.close() } catch (e) { /* ignore */ } }
     releaseWakeLock()

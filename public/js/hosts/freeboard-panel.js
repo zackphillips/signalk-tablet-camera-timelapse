@@ -7,22 +7,10 @@ document.documentElement.dataset.host = 'freeboard'
 const client = await connectExtension()
 await followFreeboardNight(client)
 
-// Only stream preview frames while Freeboard is showing this panel.
-let visible = true
-if (client.hasCapability('panels.state')) {
-  const self = client.context.id
-  await client.subscribe(['panel.state'], (_n, st) => { if (st.panel === self) visible = st.visible && !st.collapsed })
-  try {
-    const { panels } = await client.call('ui.listPanels')
-    const me = panels.find(p => p.panel === self)
-    if (me) visible = me.visible && !me.collapsed
-  } catch (e) { /* assume visible */ }
-}
-
 // The gallery opens in a floating window where Freeboard supports them,
 // otherwise in the drawer in place of this panel.
 const openGallery = () => client.hasCapability('windows')
   ? client.call('ui.openWindow', { panel: 'gallery', title: 'Timelapse photos', geometry: { anchor: 'center', width: '92%', height: '92%' }, single: true })
   : client.call('ui.openPanel', { panel: 'gallery' })
 
-mountSettings(document.getElementById('root'), createEngineClient(), { previewActive: () => visible, openGallery })
+mountSettings(document.getElementById('root'), createEngineClient(), { openGallery })

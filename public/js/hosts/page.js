@@ -48,7 +48,7 @@ function layout () {
   el.full.hidden = compact
   el.back.hidden = !(small() && showFull)
   if (!compact && !settingsMounted) {
-    mountSettings(el.settings, client, { previewActive: () => !el.full.hidden, openGallery })
+    mountSettings(el.settings, client, { openGallery })
     settingsMounted = true
   }
 }
