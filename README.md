@@ -107,7 +107,7 @@ A session starts when capture starts and ends when it stops. The session ID is t
 
 ### Storage estimate
 
-At a 10 s interval you get 360 frames/hour. At about 3 MB per full-resolution frame that's about **1 GB/hour**. The panel shows the estimate from your measured frame size. Size `maxCacheMB` and the SD card for the longest offline stretch you expect.
+At a 10 s interval you get 360 frames/hour. At about 3 MB per full-resolution frame (Highest on a 12 MP camera) that's about **1 GB/hour**; at the default Lowest it is closer to 50 MB/hour. The panel shows the estimate from your measured frame size. Size `maxCacheMB` and the SD card for the longest offline stretch you expect.
 
 ## 7. Auto mode
 
@@ -248,7 +248,8 @@ All routes are under `/plugins/signalk-tablet-camera-timelapse/`. The Freeboard 
 
 ## Tablet notes and open items
 
-- **Still resolution.** The engine prefers `ImageCapture.takePhoto()` at the chosen size and falls back to grabbing a frame from the video stream into a canvas. The panel's **Test shot** reports the real size, the method used (`takePhoto` or `canvas`) and the latency. Use it on the Tab Active4 Pro to confirm `takePhoto` gives full sensor resolution in Chrome. `jpegQuality` only applies when the browser encodes the image (the canvas fallback). `takePhoto` JPEGs come from the camera pipeline as they are.
+- **Still resolution.** The picker offers **Lowest** (the default) and **Highest**, which follow whichever camera is in use, then each exact size the current camera offers. An exact size is remembered for that camera only. On a 12 MP sensor Lowest is about 1000 × 750 (a quarter of the width, roughly 150 KB a frame), which caps video exports at that size; pick Highest or an exact size if you want 1080p or 4K timelapses.
+- **How stills are taken.** The engine prefers `ImageCapture.takePhoto()` at the chosen size and falls back to grabbing a frame from the video stream into a canvas. Some cameras ignore the requested size and return full resolution, so below the maximum the engine checks and scales the still down. The panel's **Test shot** reports the real size, the method used (`takePhoto` or `canvas`) and the latency. Use it on the Tab Active4 Pro to confirm `takePhoto` gives full sensor resolution in Chrome at Highest. `jpegQuality` applies when the browser encodes the image (the canvas fallback, or a still it scaled down). Other `takePhoto` JPEGs come from the camera pipeline as they are.
 - **Camera inside Freeboard and KIP iframes.** Neither app's iframes set `allow="camera"`, and none need to: the server sends no Permissions-Policy, so Chrome's default allows the camera in same-origin frames, Freeboard's sandboxed extension frames included. I tested this in Chromium with permission already granted. The first-time permission prompt from inside the hidden Freeboard runtime still needs a check on the tablet. If it doesn't appear, grant the camera once from the standalone page at `/signalk-tablet-camera-timelapse/`; the permission is per origin, so Freeboard then has it too.
 - **Night mode.** Camera previews are dimmed in Freeboard and KIP night mode.
 - **Video export on the tablet.** Tested with Chromium's H.264 encoder (`avc1.640033`). Chrome on Android normally has a hardware H.264 encoder; if not, the gallery falls back to VP9 or says no encoder fits and suggests a smaller size. Check one 1080p export on the Tab Active4 Pro.

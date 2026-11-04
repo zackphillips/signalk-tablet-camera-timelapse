@@ -6,6 +6,24 @@ import { prefs } from './prefs.js'
 
 const log = (...a) => console.log('[timelapse]', ...a)
 
+// Lowest and Highest are tablet-wide and follow whichever camera is in use;
+// an exact size is remembered per camera. Lowest is the default: smallest
+// frames on the Pi, over Wi-Fi and in Drive.
+const CHOICES = ['lowest', 'highest', 'exact']
+const resChoice = () => { const c = prefs.get('resChoice', 'lowest'); return CHOICES.includes(c) ? c : 'lowest' }
+
+/** The resolution a choice selects from a list: by pixel count, or the saved exact size. */
+export function pickResolution (list, choice, saved) {
+  if (!list.length) return null
+  const area = (r) => r.w * r.h
+  if (choice === 'exact' && saved) {
+    const hit = list.find(r => r.w === saved.w && r.h === saved.h)
+    if (hit) return hit
+  }
+  const sorted = [...list].sort((a, b) => area(a) - area(b))
+  return choice === 'highest' ? sorted[sorted.length - 1] : sorted[0]
+}
+
 export function createCamera ({ onChange, jpegQuality = () => 0.85 }) {
   const C = {
     stream: null,
@@ -15,15 +33,18 @@ export function createCamera ({ onChange, jpegQuality = () => 0.85 }) {
     error: null, // 'insecure' | 'denied' | message
     cameras: [],
     resolutions: [],
-    resolution: null
+    resolution: null,
+    resChoice: resChoice() // 'lowest' | 'highest' | 'exact'
   }
   let opening = null
   let frameVideo = null
 
   const changed = () => onChange && onChange()
 
+  // Exact sizes are remembered by camera label ("camera2 0, facing back"),
+  // which stays put when a browser rotates device ids.
   function deviceKey () {
-    return C.track ? (C.track.getSettings().deviceId || C.track.label) : 'default'
+    return C.track ? (C.track.label || C.track.getSettings().deviceId || 'default') : 'default'
   }
 
   function open () {
@@ -40,7 +61,6 @@ export function createCamera ({ onChange, jpegQuality = () => 0.85 }) {
       return false
     }
     const deviceId = prefs.get('cameraId', null)
-    const saved = deviceId ? prefs.get('res:' + deviceId, null) : null
     const hasImageCapture = typeof window.ImageCapture === 'function'
     const video = {}
     if (deviceId) video.deviceId = { exact: deviceId }
@@ -50,8 +70,9 @@ export function createCamera ({ onChange, jpegQuality = () => 0.85 }) {
       video.width = { ideal: 1920 }
       video.height = { ideal: 1080 }
     } else {
-      video.width = { ideal: saved ? saved.w : 4096 }
-      video.height = { ideal: saved ? saved.h : 3072 }
+      // Open at the largest size to learn the range; fitStream() then sets the chosen one.
+      video.width = { ideal: 4096 }
+      video.height = { ideal: 3072 }
     }
     let stream
     try {
@@ -86,6 +107,7 @@ export function createCamera ({ onChange, jpegQuality = () => 0.85 }) {
     })
     await listCameras()
     computeResolutions()
+    await fitStream()
     changed()
     return true
   }
@@ -132,8 +154,18 @@ export function createCamera ({ onChange, jpegQuality = () => 0.85 }) {
       add(s.width, s.height, 'video')
     }
     C.resolutions = out
-    const saved = prefs.get('res:' + deviceKey(), null)
-    C.resolution = (saved && out.find(r => r.w === saved.w && r.h === saved.h)) || out[0] || null
+    C.resChoice = resChoice()
+    C.resolution = pickResolution(out, C.resChoice, prefs.get('res:' + deviceKey(), null))
+  }
+
+  /** Video-frame mode: stills are the stream's size, so size the stream to the choice. */
+  async function fitStream () {
+    if (C.imageCapture || !C.track || !C.resolution) return
+    const s = C.track.getSettings()
+    if (s.width === C.resolution.w && s.height === C.resolution.h) return
+    try {
+      await C.track.applyConstraints({ width: { ideal: C.resolution.w }, height: { ideal: C.resolution.h } })
+    } catch (e) { log('could not resize the stream:', e.message) }
   }
 
   async function setCamera (id) {
@@ -142,12 +174,18 @@ export function createCamera ({ onChange, jpegQuality = () => 0.85 }) {
     await open()
   }
 
-  async function setResolution (w, h) {
-    const r = C.resolutions.find(x => x.w === w && x.h === h)
-    if (!r) return
-    C.resolution = r
-    prefs.set('res:' + deviceKey(), { w, h })
-    if (!C.imageCapture) { close(); await open() } // video-frame mode: size is the stream's
+  /** setResolution('lowest' | 'highest') or setResolution(w, h) for an exact size on this camera. */
+  async function setResolution (wOrChoice, h) {
+    if (wOrChoice === 'lowest' || wOrChoice === 'highest') {
+      prefs.set('resChoice', wOrChoice)
+    } else {
+      const r = C.resolutions.find(x => x.w === wOrChoice && x.h === h)
+      if (!r) return
+      prefs.set('resChoice', 'exact')
+      prefs.set('res:' + deviceKey(), { w: r.w, h: r.h })
+    }
+    computeResolutions()
+    await fitStream()
     changed()
   }
 
@@ -185,10 +223,17 @@ export function createCamera ({ onChange, jpegQuality = () => 0.85 }) {
         let blob = await C.imageCapture.takePhoto(settings)
         let w = C.resolution ? C.resolution.w : null
         let h = C.resolution ? C.resolution.h : null
-        if (blob.type !== 'image/jpeg') {
+        // Some cameras ignore imageWidth/imageHeight and return full size.
+        // Below the maximum, check and scale down so Lowest means lowest.
+        const belowMax = C.resolution && C.resolutions.some(r => r.w * r.h > C.resolution.w * C.resolution.h)
+        if (blob.type !== 'image/jpeg' || belowMax) {
           const bmp = await createImageBitmap(blob)
-          w = bmp.width; h = bmp.height
-          blob = await toJpeg(bmp, w, h, jpegQuality())
+          const over = belowMax && bmp.width > C.resolution.w * 1.05
+          if (over || blob.type !== 'image/jpeg') {
+            if (over) { w = C.resolution.w; h = Math.round(bmp.height * w / bmp.width) } else { w = bmp.width; h = bmp.height }
+            blob = await toJpeg(bmp, w, h, jpegQuality())
+          } else { w = bmp.width; h = bmp.height }
+          bmp.close()
         }
         return { blob, w, h, method: 'takePhoto' }
       } catch (e) {
@@ -196,8 +241,10 @@ export function createCamera ({ onChange, jpegQuality = () => 0.85 }) {
       }
     }
     const v = await videoEl()
-    const w = v.videoWidth
-    const h = v.videoHeight
+    // Never larger than the chosen size, also when takePhoto failed over to here.
+    const s = C.resolution && v.videoWidth > C.resolution.w ? C.resolution.w / v.videoWidth : 1
+    const w = Math.round(v.videoWidth * s)
+    const h = Math.round(v.videoHeight * s)
     return { blob: await toJpeg(v, w, h, jpegQuality()), w, h, method: 'canvas' }
   }
 

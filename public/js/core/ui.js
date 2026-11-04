@@ -134,6 +134,27 @@ function escapeHtml (s) {
 
 const CAMERA_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M9 4.5 7.6 6.5H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-9a2 2 0 0 0-2-2h-2.6L15 4.5H9Zm3 4a4.5 4.5 0 1 1 0 9 4.5 4.5 0 0 1 0-9Zm0 1.8a2.7 2.7 0 1 0 0 5.4 2.7 2.7 0 0 0 0-5.4Z"/></svg>'
 
+/**
+ * Still-size picker entries: Lowest and Highest (which follow the camera in
+ * use), then each exact size this camera offers.
+ */
+export function resolutionOptions (list) {
+  if (!list.length) return []
+  const area = (r) => r.w * r.h
+  const sorted = [...list].sort((a, b) => area(b) - area(a))
+  const dims = (r) => `${r.w} × ${r.h}${r.src === 'video' ? ' · video frame' : ''}`
+  return [
+    { value: 'lowest', text: `Lowest (${dims(sorted[sorted.length - 1])})` },
+    { value: 'highest', text: `Highest (${dims(sorted[0])})` },
+    ...sorted.map(r => ({ value: `${r.w}x${r.h}`, text: dims(r) }))
+  ]
+}
+
+export function resolutionValue (c) {
+  if (c.resChoice === 'lowest' || c.resChoice === 'highest') return c.resChoice
+  return c.resolution ? `${c.resolution.w}x${c.resolution.h}` : 'lowest'
+}
+
 export function insecureHelp () {
   return `Chrome only allows the camera on HTTPS or on an origin you trust. On a dedicated tablet, open <code>chrome://flags/#unsafely-treat-insecure-origin-as-secure</code>, add <code>${escapeHtml(location.origin)}</code>, enable it and restart Chrome. Otherwise enable HTTPS on the Signal K server with a locally trusted CA.`
 }
@@ -226,6 +247,7 @@ export function mountSettings (root, client, { previewActive = () => true, openG
   const resSel = h('select', { 'aria-label': 'Resolution' })
   camSel.addEventListener('change', () => client.send({ t: 'setCamera', id: camSel.value }))
   resSel.addEventListener('change', () => {
+    if (resSel.value === 'lowest' || resSel.value === 'highest') return client.send({ t: 'setResolution', choice: resSel.value })
     const [w, hh] = resSel.value.split('x').map(Number)
     client.send({ t: 'setResolution', w, h: hh })
   })
@@ -343,8 +365,7 @@ export function mountSettings (root, client, { previewActive = () => true, openG
 
     const c = s.camera
     fillSelect(camSel, c.cameras.map(x => ({ value: x.id, text: x.label })), c.cameraId)
-    fillSelect(resSel, c.resolutions.map((r, i) => ({ value: `${r.w}x${r.h}`, text: `${r.w} × ${r.h}${i === 0 ? ' (max)' : ''}${r.src === 'video' ? ' · video frame' : ''}` })),
-      c.resolution ? `${c.resolution.w}x${c.resolution.h}` : null)
+    fillSelect(resSel, resolutionOptions(c.resolutions), resolutionValue(c))
     camSel.disabled = !c.cameras.length
     resSel.disabled = !c.resolutions.length
     testBtn.disabled = !alive || !s.secure

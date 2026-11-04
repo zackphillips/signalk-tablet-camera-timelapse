@@ -10,7 +10,7 @@
 //                 { t: 'preview' }              keep preview frames coming (~1 s)
 //                 { t: 'testShot', id }
 //                 { t: 'setCamera', id }
-//                 { t: 'setResolution', w, h }
+//                 { t: 'setResolution', choice: 'lowest'|'highest' } or { t: 'setResolution', w, h }
 
 export const CHANNEL = 'signalk-tablet-camera-timelapse'
 export const LOCK = 'signalk-tablet-camera-timelapse-engine'

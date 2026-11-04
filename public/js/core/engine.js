@@ -88,6 +88,7 @@ export async function startEngine ({ host }) {
         cameraId: c.track ? c.track.getSettings().deviceId : prefs.get('cameraId', null),
         resolutions: c.resolutions,
         resolution: c.resolution,
+        resChoice: c.resChoice,
         method: cam.usesImageCapture ? 'takePhoto' : 'canvas'
       },
       at: Date.now()
@@ -112,7 +113,7 @@ export async function startEngine ({ host }) {
         reconcile()
         break
       case 'setCamera': await cam.setCamera(m.id); reconcile(); break
-      case 'setResolution': await cam.setResolution(m.w, m.h); break
+      case 'setResolution': await (m.choice ? cam.setResolution(m.choice) : cam.setResolution(m.w, m.h)); break
       case 'testShot': testShot(m.id); break
     }
   }
