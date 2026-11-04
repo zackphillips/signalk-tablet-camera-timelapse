@@ -58,6 +58,20 @@ function buildSchema () {
         minimum: 0,
         default: 1920
       },
+      mapDays: {
+        type: 'number',
+        title: 'Photo markers on the Freeboard chart (days)',
+        description: 'Sessions from the last this many days show as markers on the chart; tap one to see the photo. 0 shows every session still on the Pi. Frames without a GPS fix get no marker.',
+        minimum: 0,
+        default: 7
+      },
+      mapSpacingMeters: {
+        type: 'number',
+        title: 'Photo marker spacing (m)',
+        description: 'At most one marker per this distance along a session, so a passage reads as a row of dots. The photo viewer steps through every frame in between. 0 marks every frame.',
+        minimum: 0,
+        default: 100
+      },
       writeExif: { type: 'boolean', title: 'Write GPS and time into JPEG EXIF', default: true },
       publishDeltas: { type: 'boolean', title: 'Publish status to Signal K (plugins.tabletCameraTimelapse.*)', default: true },
       uploadIntervalSeconds: { type: 'number', title: 'Upload pass interval (s)', minimum: 5, default: 60 },
@@ -92,6 +106,8 @@ const DEFAULTS = {
   afterUpload: 'move',
   keepUploadedDays: 7,
   proxyWidth: 1920,
+  mapDays: 7,
+  mapSpacingMeters: 100,
   writeExif: true,
   publishDeltas: true,
   uploadIntervalSeconds: 60,

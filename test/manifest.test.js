@@ -30,6 +30,7 @@ test('references inside the manifest resolve', () => {
   const panels = new Set(m.panels.map(p => p.id))
   for (const b of m.buttons) if (b.action.panel) assert.ok(panels.has(b.action.panel), b.id)
   for (const w of m.widgets) if (w.configPanel) assert.ok(panels.has(w.configPanel), w.id)
+  for (const a of m.actions) assert.ok(panels.has(a.action.panel), a.id)
   assert.ok(['1x1', '2x1', '1x2', '2x2'].includes(m.widgets[0].size))
 })
 
@@ -44,7 +45,7 @@ test('runtime and panel pages load their module scripts, and every import resolv
       check(path.resolve(path.dirname(file), spec))
     }
   }
-  for (const page of ['fsk/runtime.html', 'fsk/panel.html', 'fsk/widget.html', 'fsk/gallery.html', 'index.html', 'gallery.html']) {
+  for (const page of ['fsk/runtime.html', 'fsk/panel.html', 'fsk/widget.html', 'fsk/gallery.html', 'fsk/photo.html', 'index.html', 'gallery.html']) {
     const html = fs.readFileSync(path.join(PUBLIC, page), 'utf8')
     const scripts = [...html.matchAll(/<script type="module" src="([^"]+)"/g)].map(x => x[1])
     assert.strictEqual(scripts.length, 1, page)
@@ -52,4 +53,22 @@ test('runtime and panel pages load their module scripts, and every import resolv
   }
   assert.ok([...seen].some(f => f.includes('vendor/plotterext-bus')), 'bus library is vendored')
   assert.ok([...seen].some(f => f.includes('vendor/mp4-muxer')), 'mp4 muxer is vendored')
+})
+
+test('photo overlay is an interactive data layer the default action opens', () => {
+  const o = m.overlays.find(x => x.id === 'photos')
+  assert.strictEqual(o.type, 'data')
+  assert.strictEqual(o.interactive, true)
+  assert.strictEqual(o.style.version, 8)
+  assert.strictEqual(o.style.sources.photos.type, 'geojson')
+  assert.strictEqual(o.style.sources.photos.data, '/plugins/signalk-tablet-camera-timelapse/photos.geojson')
+  const layerIds = o.style.layers.map(l => l.id)
+  for (const id of o.interactiveLayers) assert.ok(layerIds.includes(id), id)
+  for (const l of o.style.layers) assert.strictEqual(l.source, 'photos')
+  const a = m.actions.find(x => x.id === 'view-photo')
+  assert.strictEqual(a.default, true)
+  assert.deepStrictEqual(a.targets, [{ kind: 'overlayFeature', overlays: ['photos'] }])
+  assert.strictEqual(a.action.type, 'openWindow')
+  // Everything new stays optional: older hosts still get the capture engine.
+  for (const cap of ['overlays.data', 'actions', 'actions.overlay', 'map']) assert.ok(m.optional.includes(cap), cap)
 })

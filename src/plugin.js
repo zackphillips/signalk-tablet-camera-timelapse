@@ -10,6 +10,7 @@ const { DriveAuth } = require('./drive/oauth')
 const { DriveTarget } = require('./drive/target')
 const { Uploader } = require('./uploader')
 const { snapshot, buildSidecar, addExif } = require('./metadata')
+const { photoFeatures } = require('./photomap')
 const Auto = require('../public/js/auto')
 
 const MODES = ['off', 'auto', 'on']
@@ -226,10 +227,10 @@ module.exports = function (app) {
       app.registerResourceProvider({
         type: 'plotterExtensions',
         methods: {
-          listResources: async () => (started ? { [plugin.id]: buildManifest({ version, base: WEBAPP_PATH }) } : {}),
+          listResources: async () => (started ? { [plugin.id]: buildManifest({ version, base: WEBAPP_PATH, api: `/plugins/${plugin.id}/` }) } : {}),
           getResource: async (id) => {
             if (!started || id !== plugin.id) throw new Error(`No such plotterExtensions resource: ${id}`)
-            return buildManifest({ version, base: WEBAPP_PATH })
+            return buildManifest({ version, base: WEBAPP_PATH, api: `/plugins/${plugin.id}/` })
           },
           setResource: readOnly,
           deleteResource: readOnly
@@ -556,6 +557,29 @@ module.exports = function (app) {
         app.debug(`deleted session ${req.params.id}`)
         res.json({ ok: true, deletedFiles: keys.length, driveFolderQueued: wantDrive(req) })
       } catch (e) { fail(res, 400, e.message) }
+    })
+
+    // ---------- chart markers (Freeboard data overlay) ----------
+    const photoSince = () => (opts.mapDays > 0 ? Date.now() - opts.mapDays * 86400000 : 0)
+
+    r('readonly').get('/photos.geojson', async (req, res) => {
+      if (!ready(res)) return
+      try {
+        const { rev, sessions } = await storage.photoSessions(photoSince())
+        res.set('Cache-Control', 'no-cache')
+        res.set('ETag', `"${rev}-${opts.mapSpacingMeters}"`)
+        res.json(photoFeatures(sessions, { spacingM: opts.mapSpacingMeters }))
+      } catch (e) { fail(res, 500, e.message) }
+    })
+
+    // Cheap change check, so the chart reloads markers only when frames change.
+    r('readonly').get('/photos/rev', async (req, res) => {
+      if (!ready(res)) return
+      try {
+        const { rev } = await storage.photoSessions(photoSince())
+        res.set('Cache-Control', 'no-store')
+        res.json({ rev: `${rev}-${opts.mapSpacingMeters}` })
+      } catch (e) { fail(res, 500, e.message) }
     })
 
     r('readonly').get('/videos', async (req, res) => {
