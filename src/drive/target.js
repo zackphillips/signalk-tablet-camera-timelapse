@@ -13,6 +13,7 @@
 
 const fs = require('fs')
 const fsp = fs.promises
+const { Readable } = require('stream')
 const { NetworkError, RateLimitError, AuthError, HttpError, DriveFullError } = require('../errors')
 const { atomicWrite } = require('../storage')
 
@@ -153,6 +154,30 @@ class DriveTarget {
     await this.saveCache()
   }
 
+  /** Drive id of the file we uploaded for this local key, anywhere in our folders, or null. */
+  async findByKey (localKey) {
+    const query = `appProperties has { key='${APP_PROP_KEY}' and value='${q(localKey)}' } and trashed=false`
+    const url = `${API}/files?q=${encodeURIComponent(query)}&fields=files(id)&spaces=drive&pageSize=10`
+    const r = await this.json(url)
+    return (r.files || []).map(f => f.id)
+  }
+
+  /** Session folder id if it exists (never creates one). */
+  async findSessionFolder (sessionId) {
+    const rootId = this.cache.roots[this.rootName] || (await this.findFolder(this.rootName, 'root'))
+    if (!rootId) return null
+    return this.cache.sessions[`${rootId}/${sessionId}`] || (await this.findFolder(sessionId, rootId))
+  }
+
+  /** Move a file or folder to Drive's trash (recoverable for 30 days). */
+  async trash (id) {
+    await this.request(`${API}/files/${encodeURIComponent(id)}?fields=id`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ trashed: true })
+    })
+  }
+
   async exists (localKey, folderId) {
     const query = `appProperties has { key='${APP_PROP_KEY}' and value='${q(localKey)}' } and '${q(folderId)}' in parents and trashed=false`
     const url = `${API}/files?q=${encodeURIComponent(query)}&fields=files(id)&spaces=drive&pageSize=1`
@@ -162,8 +187,9 @@ class DriveTarget {
 
   async upload ({ filePath, name, mimeType, size, localKey, folderRef }) {
     const meta = { name, parents: [folderRef], appProperties: { [APP_PROP_KEY]: localKey } }
-    const data = await fsp.readFile(filePath)
-    if ((size ?? data.length) <= RESUMABLE_THRESHOLD) {
+    if (size === undefined || size === null) size = (await fsp.stat(filePath)).size
+    if (size <= RESUMABLE_THRESHOLD) {
+      const data = await fsp.readFile(filePath)
       const boundary = 'sktl' + Math.random().toString(16).slice(2)
       const body = Buffer.concat([
         Buffer.from(`--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(meta)}\r\n--${boundary}\r\nContent-Type: ${mimeType}\r\n\r\n`),
@@ -182,17 +208,19 @@ class DriveTarget {
       headers: {
         'Content-Type': 'application/json; charset=UTF-8',
         'X-Upload-Content-Type': mimeType,
-        'X-Upload-Content-Length': String(data.length)
+        'X-Upload-Content-Length': String(size)
       },
       body: JSON.stringify(meta)
     })
     const location = init.headers.get('location')
     if (!location) throw new HttpError('resumable upload: no session URI', 0)
+    // Stream from disk: exported videos can be hundreds of MB.
     await this.request(location, {
       method: 'PUT',
-      headers: { 'Content-Type': mimeType, 'Content-Length': String(data.length) },
-      body: data
-    }, { timeoutMs: 600000 })
+      headers: { 'Content-Type': mimeType, 'Content-Length': String(size) },
+      body: Readable.toWeb(fs.createReadStream(filePath)),
+      duplex: 'half'
+    }, { timeoutMs: Math.max(600000, size / 50) }) // allow ~50 kB/s
   }
 }
 

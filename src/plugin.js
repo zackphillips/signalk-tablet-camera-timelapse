@@ -3,8 +3,9 @@
 const fs = require('fs')
 const fsp = fs.promises
 const path = require('path')
-const { buildSchema, scanWebapps, withDefaults, SELF } = require('./schema')
-const { Storage, isValidSessionId, atomicWrite } = require('./storage')
+const { buildSchema, withDefaults, SELF } = require('./schema')
+const { buildManifest } = require('./manifest')
+const { Storage, isValidSessionId, atomicWrite, VIDEO_SESSION } = require('./storage')
 const { DriveAuth } = require('./drive/oauth')
 const { DriveTarget } = require('./drive/target')
 const { Uploader } = require('./uploader')
@@ -13,6 +14,8 @@ const Auto = require('../public/js/auto')
 
 const MODES = ['off', 'auto', 'on']
 const MAX_FRAME_BYTES = 40 * 1024 * 1024
+const MAX_THUMB_BYTES = 8 * 1024 * 1024
+const MAX_VIDEO_BYTES = 4 * 1024 * 1024 * 1024
 const WEBAPP_PATH = `/${SELF}/`
 const DELTA_PREFIX = 'plugins.tabletCameraTimelapse'
 
@@ -207,6 +210,36 @@ module.exports = function (app) {
     }
   }
 
+  /*
+   * Freeboard-SK (and any host implementing the Signal K plotter extensions
+   * API) discovers us through the plotterExtensions resource type. The
+   * server unregisters the provider when the plugin stops.
+   */
+  function registerExtension () {
+    if (typeof app.registerResourceProvider !== 'function') {
+      app.debug('registerResourceProvider unavailable; Freeboard extension not offered')
+      return
+    }
+    const version = require('../package.json').version
+    const readOnly = async () => { throw new Error(`${plugin.id} is a read-only provider`) }
+    try {
+      app.registerResourceProvider({
+        type: 'plotterExtensions',
+        methods: {
+          listResources: async () => (started ? { [plugin.id]: buildManifest({ version, base: WEBAPP_PATH }) } : {}),
+          getResource: async (id) => {
+            if (!started || id !== plugin.id) throw new Error(`No such plotterExtensions resource: ${id}`)
+            return buildManifest({ version, base: WEBAPP_PATH })
+          },
+          setResource: readOnly,
+          deleteResource: readOnly
+        }
+      })
+    } catch (e) {
+      recordError(`registering the Freeboard extension failed: ${e.message}`)
+    }
+  }
+
   function every (ms, fn) {
     const t = setInterval(() => {
       Promise.resolve().then(fn).catch(e => recordError(e.message))
@@ -256,6 +289,7 @@ module.exports = function (app) {
 
     startAuto()
     started = true
+    registerExtension()
 
     storage.init()
       .then(async () => {
@@ -302,10 +336,10 @@ module.exports = function (app) {
     autoState = null
   }
 
-  plugin.schema = () => buildSchema(scanWebapps(app.config))
+  plugin.schema = () => buildSchema()
 
   plugin.uiSchema = () => ({
-    'ui:order': ['hostedWebapp', 'buttonCorner', 'intervalSeconds', 'jpegQuality', 'defaultMode', 'autoPath', 'autoOperator', 'autoValue', 'autoCaseSensitive', 'autoStaleSeconds', 'autoDebounceSeconds', 'drive', '*'],
+    'ui:order': ['intervalSeconds', 'jpegQuality', 'defaultMode', 'autoPath', 'autoOperator', 'autoValue', 'autoCaseSensitive', 'autoStaleSeconds', 'autoDebounceSeconds', 'drive', '*'],
     drive: { clientSecret: { 'ui:widget': 'password' } }
   })
 
@@ -321,41 +355,14 @@ module.exports = function (app) {
       res.json({
         pluginId: plugin.id,
         webappPath: WEBAPP_PATH,
-        hostedWebapp: opts.hostedWebapp,
-        buttonCorner: opts.buttonCorner,
         intervalSeconds: opts.intervalSeconds,
         jpegQuality: opts.jpegQuality,
-        displayMode: opts.displayMode,
+        proxyWidth: opts.proxyWidth,
         auto: { configured: Auto.isConfigured(autoConfig()), ...autoConfig() },
         driveEnabled: !!opts.drive.enabled,
         mode: state.mode
       })
     })
-
-    r('readonly').get('/manifest.webmanifest', (req, res) => {
-      const display = opts.displayMode
-      const m = {
-        name: 'Tablet Camera Timelapse',
-        short_name: 'Timelapse',
-        description: 'Signal K web app wrapper with tablet-camera timelapse',
-        id: WEBAPP_PATH,
-        start_url: WEBAPP_PATH,
-        scope: WEBAPP_PATH,
-        display,
-        background_color: '#0b1a2a',
-        theme_color: '#0b1a2a',
-        icons: [
-          { src: `${WEBAPP_PATH}icons/icon-192.png`, sizes: '192x192', type: 'image/png', purpose: 'any' },
-          { src: `${WEBAPP_PATH}icons/icon-512.png`, sizes: '512x512', type: 'image/png', purpose: 'any' },
-          { src: `${WEBAPP_PATH}icons/icon-maskable-512.png`, sizes: '512x512', type: 'image/png', purpose: 'maskable' }
-        ]
-      }
-      if (display === 'fullscreen') m.display_override = ['fullscreen', 'standalone']
-      if (opts.orientation !== 'any') m.orientation = opts.orientation
-      res.type('application/manifest+json').send(JSON.stringify(m))
-    })
-
-    r('readonly').get('/webapps', (req, res) => res.json(scanWebapps(app.config)))
 
     r('readonly').get('/mode', (req, res) => res.json({ mode: state.mode, modeChangedAt: state.modeChangedAt }))
 
@@ -394,7 +401,7 @@ module.exports = function (app) {
       if (ctype !== 'image/jpeg') { req.resume(); return fail(res, 415, 'Content-Type must be image/jpeg') }
       const q = req.query || {}
       const sessionId = String(q.session || '')
-      if (!isValidSessionId(sessionId)) { req.resume(); return fail(res, 400, 'invalid or missing session') }
+      if (!isValidSessionId(sessionId) || sessionId === VIDEO_SESSION) { req.resume(); return fail(res, 400, 'invalid or missing session') }
       let jpeg
       try {
         jpeg = await readBody(req, MAX_FRAME_BYTES)
@@ -472,6 +479,123 @@ module.exports = function (app) {
       if (!ready(res)) return
       uploader.kick()
       res.json({ ok: true })
+    })
+
+    // ---------- gallery ----------
+    const sendFile = (res, file, { download } = {}) => {
+      // Frames and thumbnails never change once written.
+      res.set('Cache-Control', 'private, max-age=86400')
+      if (download) res.attachment(path.basename(file))
+      res.sendFile(file, (err) => { if (err && !res.headersSent) fail(res, err.statusCode || 500, 'read failed') })
+    }
+    const wantDrive = (req) => {
+      const b = req.body && typeof req.body === 'object' && !Buffer.isBuffer(req.body) ? req.body : {}
+      return !!opts.drive.enabled && (b.drive === true || req.query.drive === '1' || req.query.drive === 'true')
+    }
+
+    // Small thumbnail the capture engine sends after each frame, for the gallery.
+    r('readwrite').post('/thumbs', async (req, res) => {
+      if (!ready(res)) return
+      const sessionId = String(req.query.session || '')
+      const ts = new Date(String(req.query.ts || ''))
+      if (!isValidSessionId(sessionId) || sessionId === VIDEO_SESSION || isNaN(ts.getTime())) { req.resume(); return fail(res, 400, 'invalid session or ts') }
+      let jpeg
+      try { jpeg = await readBody(req, MAX_THUMB_BYTES) } catch (e) { return fail(res, e.status || 400, e.message) }
+      if (jpeg.length < 4 || jpeg[0] !== 0xff || jpeg[1] !== 0xd8) return fail(res, 400, 'body is not a JPEG')
+      try {
+        await storage.writeThumb({ sessionId, captureDate: ts, jpeg, kind: req.query.kind === 'hd' ? 'hd' : 'thumb' })
+        res.status(201).json({ ok: true })
+      } catch (e) { fail(res, 500, e.message) }
+    })
+
+    r('readonly').get('/sessions', async (req, res) => {
+      if (!ready(res)) return
+      try {
+        res.json({ sessions: await storage.listSessions(), videos: await storage.listVideos(), afterUpload: opts.afterUpload, keepUploadedDays: opts.keepUploadedDays, driveEnabled: !!opts.drive.enabled, proxyWidth: opts.proxyWidth })
+      } catch (e) { fail(res, 500, e.message) }
+    })
+
+    r('readonly').get('/sessions/:id', async (req, res) => {
+      if (!ready(res)) return
+      const frames = await storage.listFrames(req.params.id)
+      if (!frames) return fail(res, 400, 'invalid session id')
+      if (!frames.length) return fail(res, 404, 'no such session')
+      res.json({ id: req.params.id, frames, intervalSeconds: opts.intervalSeconds })
+    })
+
+    r('readonly').get('/sessions/:id/frames/:name', (req, res) => {
+      if (!ready(res)) return
+      const { id, name } = req.params
+      if (!isValidSessionId(id) || !/^[0-9TZ-]+$/.test(name)) return fail(res, 400, 'bad request')
+      // ?size=thumb|hd fall back to the full frame when no proxy exists.
+      const size = req.query.size || (req.query.thumb === '1' ? 'thumb' : 'full')
+      const file = (size !== 'full' && storage.thumbFile(id, name, size === 'hd' ? 'hd' : 'thumb')) || storage.frameFile(id, name)
+      if (!file) return fail(res, 404, 'no such frame')
+      sendFile(res, file, { download: req.query.download === '1' })
+    })
+
+    // Delete some frames (trim, single frames) from the Pi, optionally from Drive too.
+    r('readwrite').post('/sessions/:id/delete', async (req, res) => {
+      if (!ready(res)) return
+      const frames = req.body && Array.isArray(req.body.frames) ? req.body.frames : null
+      if (!frames) return fail(res, 400, 'body must be {"frames": [names], "drive": bool}')
+      try {
+        const keys = await storage.deleteFrames(req.params.id, frames)
+        if (wantDrive(req)) await uploader.queueDeletes(keys.map(key => ({ key })))
+        app.debug(`deleted ${frames.length} frame(s) from ${req.params.id}`)
+        res.json({ ok: true, deletedFiles: keys.length, driveQueued: wantDrive(req) ? keys.length : 0 })
+      } catch (e) { fail(res, 400, e.message) }
+    })
+
+    r('readwrite').delete('/sessions/:id', async (req, res) => {
+      if (!ready(res)) return
+      try {
+        const keys = await storage.deleteSession(req.params.id)
+        // Trashing the Drive folder takes everything in it in one call.
+        if (wantDrive(req)) await uploader.queueDeletes([{ folder: req.params.id }])
+        app.debug(`deleted session ${req.params.id}`)
+        res.json({ ok: true, deletedFiles: keys.length, driveFolderQueued: wantDrive(req) })
+      } catch (e) { fail(res, 400, e.message) }
+    })
+
+    r('readonly').get('/videos', async (req, res) => {
+      if (!ready(res)) return
+      res.json({ videos: await storage.listVideos() })
+    })
+
+    // Save a video the browser encoded. Streams to disk; queued for Drive.
+    r('readwrite').post('/videos', async (req, res) => {
+      if (!ready(res)) return
+      const blocker = storage.ingestBlocker()
+      if (blocker === 'disk_low') { req.resume(); return fail(res, 507, 'disk_low') }
+      const ctype = String(req.headers['content-type'] || '').split(';')[0].trim()
+      if (ctype !== 'video/mp4' && ctype !== 'video/webm') { req.resume(); return fail(res, 415, 'Content-Type must be video/mp4 or video/webm') }
+      const len = Number(req.headers['content-length'])
+      const free = storage.freeBytes()
+      if (len && free !== null && free - len < storage.minFreeBytes) { req.resume(); return fail(res, 507, 'disk_low') }
+      try {
+        const v = await storage.saveVideo(String(req.query.name || ''), req, { limit: MAX_VIDEO_BYTES, forUpload: !!opts.drive.enabled && req.query.drive !== '0' })
+        if (opts.drive.enabled) uploader.kick()
+        res.status(201).json({ ok: true, ...v, url: `/plugins/${plugin.id}/videos/${encodeURIComponent(v.name)}` })
+      } catch (e) {
+        fail(res, e.status || 500, e.message)
+      }
+    })
+
+    r('readonly').get('/videos/:name', (req, res) => {
+      if (!ready(res)) return
+      const file = storage.videoFile(req.params.name)
+      if (!file) return fail(res, 404, 'no such video')
+      sendFile(res, file, { download: req.query.download === '1' })
+    })
+
+    r('readwrite').delete('/videos/:name', async (req, res) => {
+      if (!ready(res)) return
+      try {
+        const key = await storage.deleteVideo(req.params.name)
+        if (wantDrive(req)) await uploader.queueDeletes([{ key }])
+        res.json({ ok: true, driveQueued: wantDrive(req) })
+      } catch (e) { fail(res, e.status || 500, e.message) }
     })
   }
 

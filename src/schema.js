@@ -1,67 +1,11 @@
 'use strict'
 
-const fs = require('fs')
-const path = require('path')
-
 const SELF = 'signalk-tablet-camera-timelapse'
-const DEFAULT_WEBAPP = '@signalk/freeboard-sk'
 
-/*
- * Installed web apps for the config dropdown. The server's own list
- * (app.webapps, served at /skServer/webapps) is filled after plugins start,
- * so scan node_modules the same way the server does: configPath and appPath.
- */
-function scanWebapps (config) {
-  const dirs = []
-  if (config && config.configPath) dirs.push(path.join(config.configPath, 'node_modules'))
-  if (config && config.appPath && config.appPath !== config.configPath) dirs.push(path.join(config.appPath, 'node_modules'))
-  const found = new Map()
-  const readPkg = (dir) => {
-    try {
-      const pkg = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8'))
-      const kw = pkg.keywords || []
-      if (pkg.name && pkg.name !== SELF && (kw.includes('signalk-webapp') || kw.includes('signalk-embeddable-webapp')) && !found.has(pkg.name)) {
-        found.set(pkg.name, { name: pkg.name, displayName: (pkg.signalk && pkg.signalk.displayName) || pkg.name })
-      }
-    } catch (e) { /* not a package */ }
-  }
-  for (const d of dirs) {
-    let entries = []
-    try { entries = fs.readdirSync(d) } catch (e) { continue }
-    for (const e of entries) {
-      if (e.startsWith('@')) {
-        let scoped = []
-        try { scoped = fs.readdirSync(path.join(d, e)) } catch (err) { continue }
-        for (const s of scoped) readPkg(path.join(d, e, s))
-      } else if (!e.startsWith('.')) {
-        readPkg(path.join(d, e))
-      }
-    }
-  }
-  return [...found.values()].sort((a, b) => a.displayName.localeCompare(b.displayName))
-}
-
-function buildSchema (webapps) {
-  const apps = webapps && webapps.length ? webapps : [{ name: DEFAULT_WEBAPP, displayName: 'Freeboard-SK' }]
-  if (!apps.find(a => a.name === DEFAULT_WEBAPP)) apps.unshift({ name: DEFAULT_WEBAPP, displayName: 'Freeboard-SK (not installed)' })
+function buildSchema () {
   return {
     type: 'object',
     properties: {
-      hostedWebapp: {
-        type: 'string',
-        title: 'Hosted web app',
-        description: 'Web app shown full screen inside the wrapper',
-        enum: apps.map(a => a.name),
-        enumNames: apps.map(a => a.displayName),
-        default: DEFAULT_WEBAPP
-      },
-      buttonCorner: {
-        type: 'string',
-        title: 'Button corner',
-        description: 'Freeboard-SK uses the top-left (menu) and bottom-right (drop waypoint) corners',
-        enum: ['bottom-left', 'bottom-right', 'top-right'],
-        default: 'bottom-left'
-      },
       intervalSeconds: { type: 'number', title: 'Capture interval (s)', minimum: 1, default: 10 },
       jpegQuality: {
         type: 'number',
@@ -107,15 +51,15 @@ function buildSchema (webapps) {
         default: 'move'
       },
       keepUploadedDays: { type: 'number', title: 'Keep uploaded files (days, move mode)', minimum: 0, default: 7 },
+      proxyWidth: {
+        type: 'number',
+        title: 'Gallery HD proxy width (px)',
+        description: 'The tablet also saves a reduced copy of each frame on the Pi (never uploaded) so videos up to this width export without pulling full-size frames over Wi-Fi. About 400 KB per frame at 1920. 0 turns it off.',
+        minimum: 0,
+        default: 1920
+      },
       writeExif: { type: 'boolean', title: 'Write GPS and time into JPEG EXIF', default: true },
       publishDeltas: { type: 'boolean', title: 'Publish status to Signal K (plugins.tabletCameraTimelapse.*)', default: true },
-      displayMode: {
-        type: 'string',
-        title: 'Installed app display mode',
-        enum: ['fullscreen', 'standalone', 'browser'],
-        default: 'fullscreen'
-      },
-      orientation: { type: 'string', title: 'Installed app orientation', enum: ['any', 'landscape', 'portrait'], default: 'any' },
       uploadIntervalSeconds: { type: 'number', title: 'Upload pass interval (s)', minimum: 5, default: 60 },
       uploadConcurrency: { type: 'number', title: 'Parallel uploads', minimum: 1, maximum: 8, default: 1 },
       drive: {
@@ -133,8 +77,6 @@ function buildSchema (webapps) {
 }
 
 const DEFAULTS = {
-  hostedWebapp: DEFAULT_WEBAPP,
-  buttonCorner: 'bottom-left',
   intervalSeconds: 10,
   jpegQuality: 0.85,
   defaultMode: 'off',
@@ -149,10 +91,9 @@ const DEFAULTS = {
   maxCacheMB: 1024,
   afterUpload: 'move',
   keepUploadedDays: 7,
+  proxyWidth: 1920,
   writeExif: true,
   publishDeltas: true,
-  displayMode: 'fullscreen',
-  orientation: 'any',
   uploadIntervalSeconds: 60,
   uploadConcurrency: 1,
   drive: { enabled: false, folderName: 'Signal K Timelapse', clientId: '', clientSecret: '' }
@@ -166,4 +107,4 @@ function withDefaults (opts) {
   return o
 }
 
-module.exports = { buildSchema, scanWebapps, withDefaults, DEFAULTS, SELF, DEFAULT_WEBAPP }
+module.exports = { buildSchema, withDefaults, DEFAULTS, SELF }

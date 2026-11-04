@@ -190,3 +190,35 @@ test('target: parallel ensureFolder calls create each folder once', async () => 
   assert.deepStrictEqual(ids, ['id-s1', 'id-s1', 'id-s1', 'id-s2'])
   assert.deepStrictEqual(created.sort(), ['Root', 's1', 's2'])
 })
+
+test('target: trash and findByKey', async () => {
+  const d = tmpdir()
+  const calls = []
+  const fetch = mockFetch([
+    [(u, o) => o.method === 'PATCH', (u, o) => { calls.push(['PATCH', u, o.body]); return res(200, { id: 'x' }) }],
+    [(u) => u.includes('appProperties'), () => res(200, { files: [{ id: 'a' }, { id: 'b' }] })]
+  ])
+  const t = new DriveTarget({ auth: authStub(), fetch, folderCachePath: path.join(d, 'f.json') })
+  assert.deepStrictEqual(await t.findByKey('s1/a.jpg'), ['a', 'b'])
+  await t.trash('a')
+  assert.match(calls[0][1], /\/files\/a\?/)
+  assert.deepStrictEqual(JSON.parse(calls[0][2]), { trashed: true })
+})
+
+test('target: large uploads stream from disk', async () => {
+  const d = tmpdir()
+  const f = path.join(d, 'v.mp4')
+  fs.writeFileSync(f, Buffer.alloc(6 * 1024 * 1024, 1))
+  let streamed = 0
+  const fetch = mockFetch([
+    [(u) => u.includes('uploadType=resumable'), (u, o) => { assert.strictEqual(o.headers['X-Upload-Content-Length'], String(6 * 1024 * 1024)); return res(200, {}, { location: 'https://up/1' }) }],
+    [(u) => u === 'https://up/1', async (u, o) => {
+      assert.strictEqual(o.duplex, 'half')
+      for await (const c of o.body) streamed += c.length
+      return res(200, { id: 'v' })
+    }]
+  ])
+  const t = new DriveTarget({ auth: authStub(), fetch, folderCachePath: path.join(d, 'f.json') })
+  await t.upload({ filePath: f, name: 'v.mp4', mimeType: 'video/mp4', localKey: 'videos/v.mp4', folderRef: 'fid' })
+  assert.strictEqual(streamed, 6 * 1024 * 1024)
+})

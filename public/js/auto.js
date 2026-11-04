@@ -1,5 +1,5 @@
 /*
- * Auto-condition evaluator. Shared by the browser wrapper and the server plugin
+ * Auto-condition evaluator. Shared by the browser capture engine and the server plugin
  * (UMD), so both sides apply identical rules.
  *
  * Rules:
