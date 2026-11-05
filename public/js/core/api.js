@@ -29,6 +29,13 @@ export const putSettings = (patch) => api('/settings', {
   headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify(patch)
 })
+/** Drive settings on the Pi. The client secret is write-only. */
+export const getDriveSettings = () => api('/drive/settings')
+export const putDriveSettings = (patch) => api('/drive/settings', {
+  method: 'PUT',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify(patch)
+})
 export const driveStart = () => api('/drive/auth/start', { method: 'POST' })
 export const drivePoll = () => api('/drive/auth/poll')
 export const driveRevoke = () => api('/drive/auth/revoke', { method: 'POST' })

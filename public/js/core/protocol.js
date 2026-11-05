@@ -7,6 +7,7 @@
 // UIs -> engine   { t: 'hello' }                ask for state now
 //                 { t: 'refresh' }              re-read server status, mode and settings now
 //                 { t: 'testShot', id }
+//                 { t: 'probe' }                open the camera once to list cameras and sizes
 //                 { t: 'setCamera', id }
 //                 { t: 'setResolution', choice: 'lowest'|'highest' } or { t: 'setResolution', w, h }
 

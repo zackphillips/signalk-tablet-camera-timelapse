@@ -66,6 +66,23 @@ async function shareBlob (blob, name) {
   await navigator.share({ files: [file], title: name })
 }
 
+/**
+ * Drive link for a folder: open it, and copy it. Freeboard's sandbox blocks
+ * new tabs and sometimes the clipboard, so the URL is also shown selectable.
+ */
+function driveLink (url, shared, label = 'Drive folder') {
+  if (!url) return null
+  const field = h('input', { type: 'text', readonly: true, value: url, class: 'tl-g-link', onfocus: (e) => e.target.select() })
+  const copy = h('button', { type: 'button', text: 'Copy link', onclick: async () => {
+    try { await navigator.clipboard.writeText(url); copy.textContent = 'Copied' } catch (e) { field.focus(); field.select(); copy.textContent = 'Select and copy' }
+    setTimeout(() => { copy.textContent = 'Copy link' }, 2500)
+  } })
+  return h('div', { class: 'tl-g-drive' },
+    h('div', { class: 'tl-hint', text: `${label}: ${shared ? 'anyone with the link can view' : 'private (only your Google account)'}` }),
+    h('div', { class: 'tl-row' }, h('a', { class: 'tl-btn', href: url, target: '_blank', rel: 'noopener', text: 'Open in Drive' }), copy),
+    field)
+}
+
 export function mountGallery (root, { title = 'Photos & videos', session } = {}) {
   root.classList.add('tl-gallery')
   const canDownload = downloadsAllowed()
@@ -122,6 +139,7 @@ export function mountGallery (root, { title = 'Photos & videos', session } = {})
     body.append(grid)
 
     body.append(h('h2', { text: 'Videos' }))
+    if (info.videosDriveUrl) body.append(driveLink(info.videosDriveUrl, info.shareLinks, 'Videos folder in Drive'))
     if (!info.videos.length) body.append(h('p', { class: 'tl-hint', text: 'None yet. Open a session and choose Make video.' }))
     for (const v of info.videos) body.append(videoRow(v))
   }
@@ -398,6 +416,7 @@ export function mountGallery (root, { title = 'Photos & videos', session } = {})
               h('div', { class: 'tl-row' }, makeBtn, progress, progressText),
               result)
             : h('p', { class: 'tl-banner', text: 'This browser cannot encode video (no WebCodecs). Use Chrome on Android or a desktop browser.' })),
+        data.driveUrl ? h('section', {}, h('h2', { text: 'Google Drive' }), driveLink(data.driveUrl, data.driveShared)) : null,
         h('section', {}, deleteSession))
     ), () => { if (playing) clearInterval(playing); clearTimeout(hdTimer); if (abort) abort.abort() })
     show(0, { sharp: true })

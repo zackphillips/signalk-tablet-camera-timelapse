@@ -102,7 +102,7 @@ class DriveAuth {
   }
 
   async startDeviceFlow () {
-    if (!this.configured()) throw new Error('Set drive.clientId and drive.clientSecret in the plugin config first')
+    if (!this.configured()) throw new Error('No Google client: open Advanced in the Drive settings and enter your own client ID and secret')
     this.cancelPolling()
     const { status, body } = await postForm(this.fetch, DEVICE_CODE_URL, { client_id: this.clientId, scope: SCOPE })
     if (status !== 200) {

@@ -121,6 +121,7 @@ Things you change often are in the app's settings (the Freeboard panel, the KIP 
 | **Interval** (1–3600 s) | On the Pi (`settings.json` in the plugin data folder), for every tablet. Takes effect on the next frame. The plugin config value is the default until you change it here. |
 | **Timestamp on each photo**: off, or a corner | On the Pi, for every tablet. |
 | **Camera** and **Still resolution** | On this tablet (browser storage), since they depend on its cameras. |
+| **Google Drive** (on/off, link sharing, folder, after upload, your own client) | On the Pi, for every tablet. See [Google Drive](#8-google-drive). |
 
 All of them survive reloads and restarts. Changing the Pi-side settings needs a read/write login. **Take test photo** takes one photo per press with the current camera, resolution and timestamp, saves it to the `test-shots` folder and shows it. There is no live preview, so the camera is only open while capturing or taking a test photo.
 
@@ -158,24 +159,45 @@ To test by hand, send a delta from any read/write client:
 
 ## 8. Google Drive
 
-The plugin uses the OAuth **device flow** with the `drive.file` scope. The app can only see files it creates. Google's docs list `drive.file` as allowed for the device flow and as a non-sensitive scope.
+Everything is set up from the **Google Drive** section of the Timelapse panel (Freeboard, KIP or the standalone page). Nothing goes in the server's plugin config.
 
-### Create OAuth credentials (one time, about 5 minutes)
+1. Tick **Upload to Google Drive**.
+2. Tap **Connect Google Drive**. It shows a code and `google.com/device`. Open that on your phone, enter the code and approve. The Pi waits for the approval itself, so you can close the panel.
+3. You may see Google's "unverified app" screen. Choose **Advanced → Go to … (unsafe)**. The app asks only for `drive.file`, which lets it see and change **only the files it created**, nothing else in your Drive.
 
-1. Go to <https://console.cloud.google.com/> and create a project.
-2. **APIs & Services → Library**: enable **Google Drive API**.
-3. **Google Auth Platform → Branding/Audience** (the OAuth consent screen): choose user type **External** and fill in the app name and your email.
-4. **Audience → Publish app**, to move it to **In production**. Do this. While an app is in *Testing*, Google expires its refresh tokens after **7 days**, and uploads would stop every week. `drive.file` is non-sensitive, so publishing needs no Google review. You'll see an "unverified app" warning when you approve, and that's expected.
-5. **Clients → Create client**, application type **TVs and Limited Input devices**. Copy the client ID and secret.
-6. In the plugin config, enable **Google Drive**, then paste the client ID and secret.
+The plugin ships with a built-in Google client, so there is no Google Cloud setup. The sign-in token is stored on the Pi as `drive-token.json` (mode `0600`) and never logged. **Disconnect** revokes it with Google and deletes the file.
 
-### Authorize
+Settings in the panel, stored on the Pi in `drive-settings.json` (mode `0600`) and shared by every tablet:
 
-Open the Timelapse panel (or the KIP page) and tap **Connect Google Drive**. It shows a URL (`google.com/device`) and a code. Approve on your phone. The plugin polls Google itself, so you can close the panel. While it waits, the admin UI's plugin status also shows the URL and code.
+| Setting | Default |
+|---|---|
+| Upload to Google Drive | off |
+| **Anyone with the link can view** | on |
+| Drive folder | `Signal K Timelapse` |
+| After upload | keep on the Pi for 7 days, then delete |
 
-The refresh token is stored in the plugin data dir as `drive-token.json` with mode `0600`, and it's never logged. **Disconnect** revokes it with Google and deletes the file.
+**Link sharing.** With it on, each session folder (and the videos folder) is shared as "anyone with the link can view", not discoverable in search. Photos inside inherit it. The gallery shows each session's Drive link with **Open in Drive** and **Copy link**. Sharing is per session folder, so a link you send exposes one passage, not your whole history. Every photo carries the boat's GPS position in its EXIF, so anyone holding a link can see where the boat was. Turning the setting off removes link sharing from every session folder the plugin made, on the next upload pass.
 
-A public npm package can't keep a client secret confidential, which is why you bring your own credentials.
+Changing anything takes effect at once. Changing the Google client means connecting again.
+
+### Advanced: your own Google client
+
+Under **Advanced** (collapsed) you can use your own Google Cloud client instead of the built-in one, for example if the built-in one ever stops working:
+
+1. <https://console.cloud.google.com/>: create a project, then **APIs & Services → Library → Google Drive API → Enable**.
+2. **Google Auth Platform → Branding / Audience**: user type **External**, app name, your email.
+3. **Audience → Publish app** to move it to **In production**. Don't skip this: in *Testing*, Google expires sign-ins after **7 days**. `drive.file` is non-sensitive, so publishing needs no review.
+4. **Clients → Create client**, type **TVs and Limited Input devices**. Copy the ID and secret into Advanced, tick **Use my own Google Cloud client**, **Save credentials**, then **Connect**.
+
+Installs that had a client ID and secret in the plugin config keep using them until changed in the panel.
+
+### For the maintainer: the built-in client
+
+The built-in client lives in `src/drive/client.js`. It is created exactly like the steps above, from a personal (not work) Google account, with no billing account attached. Google treats device-flow clients as public, so the secret ships in the code by design (Google: such apps "cannot keep secrets confidential"). Notes:
+
+- Google deletes OAuth clients unused for six months. Every upload pass from any install counts as use.
+- The consent screen shows the project's app name and support email, so use an email alias.
+- If the project is ever suspended, every install falls back to **Advanced**.
 
 ### Drive layout
 
@@ -200,7 +222,7 @@ A public npm package can't keep a client secret confidential, which is why you b
 
 - Writes are atomic (temp file, fsync, rename). `POST /frames` responds once the frame is on disk. A frame is identified by session plus capture timestamp, so a client retry after a lost response returns `200 duplicate` instead of storing a second copy.
 - Frame filenames are UTC timestamps. The sidecar `.json` records capture time, position, SOG, COG, heading and wind, in Signal K SI units, snapshotted from the server at ingest. With `writeExif` on, GPS position, speed, track, heading and UTC time go into the JPEG EXIF as well.
-- `afterUpload` options:
+- **After upload** (set in the panel's Drive section; `afterUpload` in the plugin config is the default):
   - `move` (default): move to `uploaded/` and prune after `keepUploadedDays`.
   - `delete`: delete after upload.
   - `keep`: move to `uploaded/` and never prune.
@@ -257,6 +279,7 @@ All routes are under `/plugins/signalk-tablet-camera-timelapse/`. The Freeboard 
 |---|---|---|
 | POST | `/frames?session=&ts=&mode=&device=&w=&h=` | raw `image/jpeg` body. Returns 201, 200 (`duplicate`), 400, 413, 415 or 507 (`disk_low` or `cache_full`) |
 | GET/PUT | `/mode` | `{"mode":"off"\|"auto"\|"on"}` |
+| GET/PUT | `/drive/settings` | Drive settings (partial PUT; `null` resets). The client secret is write-only |
 | GET/PUT | `/settings` | app settings `{"intervalSeconds", "stamp"}`. PUT takes a partial object; `null` resets a field to its default |
 | GET | `/status` | mode, Auto evaluation, queue, cache, disk, Drive auth and uploader state, recent errors |
 | GET | `/config/client` | config subset for the capture engine |
