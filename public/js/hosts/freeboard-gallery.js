@@ -6,4 +6,6 @@ import { followFreeboardNight } from './freeboard-theme.js'
 document.documentElement.dataset.host = 'freeboard'
 const client = await connectExtension()
 await followFreeboardNight(client)
-mountGallery(document.getElementById('root'))
+// Opened from the photo viewer with the session to show.
+const session = client.context.params && client.context.params.session
+mountGallery(document.getElementById('root'), { session })

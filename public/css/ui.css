@@ -139,7 +139,9 @@ body.tl-transparent .tl-dot { border-color: rgba(10, 20, 32, 0.8); }
 .tl-kv dd.tl-warn { color: var(--tl-warn-fg); background: var(--tl-warn-bg); border-radius: 4px; padding: 0 4px; }
 .tl-test-img { width: 100%; border-radius: 8px; margin-top: 8px; background: #000; display: block; }
 /* Night mode (Freeboard or KIP): camera images would glare on a dark bridge. */
-[data-night] .tl-test-img { filter: brightness(0.35) sepia(0.6) hue-rotate(-30deg); }
+/* Night: dim photos and video. Not inside Freeboard, whose night mode already
+   filters the whole app (our windows included); a second filter blacks them out. */
+:root:not([data-host="freeboard"])[data-night] :is(.tl-test-img, .tl-g-frame, .tl-g-card img, .tl-g-player, .tl-g-video video, .tl-v-img) { filter: brightness(0.35) sepia(0.6) hue-rotate(-30deg); }
 .tl-test-img[hidden] { display: none; }
 .tl-code { font: 600 24px/1.2 ui-monospace, Menlo, monospace; letter-spacing: 0.08em; color: var(--tl-fg); }
 .tl-toast { position: sticky; bottom: 8px; margin-top: 8px; padding: 10px 14px; border-radius: var(--tl-radius); background: var(--tl-fg); color: var(--tl-bg); font-size: 14px; }
@@ -197,4 +199,22 @@ body.tl-transparent .tl-dot { border-color: rgba(10, 20, 32, 0.8); }
 }
 .tl-g-body > .tl-row select { width: auto; margin: 0; }
 .tl-g-body progress { flex: 1; min-width: 120px; accent-color: var(--tl-accent); }
-[data-night] .tl-g-frame, [data-night] .tl-g-card img, [data-night] .tl-g-player, [data-night] .tl-g-video video { filter: brightness(0.35) sepia(0.6) hue-rotate(-30deg); }
+
+/* ---------- photo viewer (chart marker) ---------- */
+.tl-viewer button {
+  background: transparent; color: var(--tl-accent);
+  border: 1px solid var(--tl-line); border-radius: 20px;
+  padding: 6px 14px; font: inherit; font-weight: 500; cursor: pointer;
+}
+.tl-viewer button:disabled { opacity: 0.45; cursor: default; }
+.tl-viewer button.tl-icon-btn { border: 0; padding: 0; color: var(--tl-fg); font-size: 26px; }
+.tl-viewer { display: flex; flex-direction: column; height: 100vh; box-sizing: border-box; padding: 8px; gap: 6px; }
+.tl-v-stage { position: relative; flex: 1; min-height: 0; background: #000; border-radius: var(--tl-radius); display: flex; align-items: center; justify-content: center; overflow: hidden; touch-action: pan-y; }
+.tl-v-img { max-width: 100%; max-height: 100%; object-fit: contain; user-select: none; -webkit-user-drag: none; }
+.tl-v-img[hidden], .tl-v-empty[hidden] { display: none; }
+.tl-v-empty { position: absolute; color: #cfd8e0; text-align: center; padding: 0 16px; }
+.tl-v-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 12px; }
+.tl-v-when { font-weight: 600; }
+.tl-v-text { font-variant-numeric: tabular-nums; min-width: 0; }
+.tl-v-ctrl { margin-top: 0; }
+.tl-v-count { min-width: 4.5em; text-align: center; font-variant-numeric: tabular-nums; }

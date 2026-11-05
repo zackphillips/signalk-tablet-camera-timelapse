@@ -50,10 +50,23 @@ Enable the plugin and reload Freeboard. There's nothing to switch on inside Free
   | warning | Problem: camera denied, insecure context, Pi cache full, uploads failing, Drive not connected while frames are queued |
   | alarm | Pi disk space low, so frames are being rejected |
 
-- **Panel:** the Off/Auto/On switch, live status, the capture interval and timestamp, camera and still-resolution pickers, **Take test photo**, and Google Drive connect and disconnect. It follows Freeboard's night mode.
+- **Panel:** the Off/Auto/On switch, live status, the capture interval and timestamp, camera and still-resolution pickers, **Take test photo**, and Google Drive connect and disconnect. It follows Freeboard's night mode. Photos are not dimmed a second time: Freeboard's night filter already covers its extension windows.
 - **Widget** (optional): press and hold an empty corner cell on the chart, then pick **Timelapse**. Tap the widget to cycle Off → Auto → On. Press and hold it to open the settings, which also has **Remove widget**.
 
 Capture runs in Freeboard's background runtime, a hidden iframe that Freeboard keeps loaded while the plugin is enabled. It doesn't depend on the panel or widget being open.
+
+### Photo markers on the chart
+
+Every frame taken with a GPS fix shows as a magenta dot on the chart. The newest one is larger. Tap a dot to open the photo in a floating window with its time, speed, course and position. **‹ ›**, the arrow keys or a swipe step through the session's other frames. **Center chart** moves the map to the frame shown, and **Session** opens the session in the gallery. A second tap on another dot while the window is open switches it to that photo.
+
+![Photo markers and the viewer](public/screenshots/freeboard-markers.png)
+
+- The markers are a Freeboard map layer named **Timelapse photos**. Show, hide or fade it in Freeboard's layer list like a chart.
+- Markers sit on Freeboard's own vessel trail, so a tap usually hits both, and Freeboard asks which you meant: pick **Photo …**. Turn the trail off, or zoom in, to skip that step.
+- They are thinned to one per `mapSpacingMeters` (default 100 m) along each session, so a passage reads as a row of dots and a night at anchor leaves a few. The viewer still steps through every frame.
+- Sessions from the last `mapDays` (default 7, `0` for all) that are still on the Pi are shown. Test shots and frames without a fix get no marker. With `afterUpload: delete` a marker disappears once its frame leaves the Pi.
+- New frames show up within about 30 s; the background runtime checks a cheap revision and asks Freeboard to reload the layer only when frames have changed.
+- These are not Signal K waypoints. Thousands of photo waypoints would clutter Freeboard's waypoint list and sync to every other app on the server; an extension layer stays in its own lane. This needs Freeboard 3.4 or later (`overlays.data` and `actions.overlay`); older versions get everything else.
 
 ## 3. KIP
 
@@ -257,6 +270,8 @@ All routes are under `/plugins/signalk-tablet-camera-timelapse/`. The Freeboard 
 | GET | `/sessions/:id/frames/:name?size=thumb\|hd\|full` | a frame; `thumb`/`hd` fall back to `full`. `&download=1` for an attachment |
 | POST | `/sessions/:id/delete` | `{"frames": [names], "drive": bool}` |
 | DELETE | `/sessions/:id?drive=1` | delete a whole session (and trash its Drive folder) |
+| GET | `/photos.geojson` | chart markers: thinned frames with a position, as a GeoJSON FeatureCollection |
+| GET | `/photos/rev` | `{"rev"}` that changes whenever the markers would |
 | GET | `/videos`, `/videos/:name` | list or fetch saved videos |
 | POST | `/videos?name=` | raw `video/mp4` or `video/webm` body, streamed to disk, queued for Drive |
 | DELETE | `/videos/:name?drive=1` | delete a saved video (and its Drive copy) |
@@ -266,7 +281,7 @@ All routes are under `/plugins/signalk-tablet-camera-timelapse/`. The Freeboard 
 - **Still resolution.** The picker offers **Lowest** (the default) and **Highest**, which follow whichever camera is in use, then each exact size the current camera offers. An exact size is remembered for that camera only. On a 12 MP sensor Lowest is about 1000 × 750 (a quarter of the width, roughly 150 KB a frame), which caps video exports at that size; pick Highest or an exact size if you want 1080p or 4K timelapses.
 - **How stills are taken.** The engine prefers `ImageCapture.takePhoto()` at the chosen size and falls back to grabbing a frame from the video stream into a canvas. Some cameras ignore the requested size and return full resolution, so below the maximum the engine checks and scales the still down. **Take test photo** reports the real size, the method used (`takePhoto` or `canvas`) and the latency. Use it on the Tab Active4 Pro to confirm `takePhoto` gives full sensor resolution in Chrome at Highest. `jpegQuality` applies when the browser encodes the image (the canvas fallback, or a still it scaled down). Other `takePhoto` JPEGs come from the camera pipeline as they are.
 - **Camera inside Freeboard and KIP iframes.** Neither app's iframes set `allow="camera"`, and none need to: the server sends no Permissions-Policy, so Chrome's default allows the camera in same-origin frames, Freeboard's sandboxed extension frames included. I tested this in Chromium with permission already granted. The first-time permission prompt from inside the hidden Freeboard runtime still needs a check on the tablet. If it doesn't appear, grant the camera once from the standalone page at `/signalk-tablet-camera-timelapse/`; the permission is per origin, so Freeboard then has it too.
-- **Night mode.** Test photos and gallery images are dimmed in night mode.
+- **Night mode.** Test photos and gallery images are dimmed in KIP and standalone night mode. In Freeboard they are not, because its night filter already dims extension windows.
 - **Video export on the tablet.** Tested with Chromium's H.264 encoder (`avc1.640033`). Chrome on Android normally has a hardware H.264 encoder; if not, the gallery falls back to VP9 or says no encoder fits and suggests a smaller size. Check one 1080p export on the Tab Active4 Pro.
 - **Power.** The camera stays open in On and Auto modes, including while Auto waits, so focus and exposure stay settled. In Off mode, or while the page is hidden, the camera is closed.
 

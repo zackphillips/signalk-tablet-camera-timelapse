@@ -66,7 +66,7 @@ async function shareBlob (blob, name) {
   await navigator.share({ files: [file], title: name })
 }
 
-export function mountGallery (root, { title = 'Photos & videos' } = {}) {
+export function mountGallery (root, { title = 'Photos & videos', session } = {}) {
   root.classList.add('tl-gallery')
   const canDownload = downloadsAllowed()
   let info = { driveEnabled: false }
@@ -404,6 +404,7 @@ export function mountGallery (root, { title = 'Photos & videos' } = {}) {
     renderSel()
   }
 
-  showList()
+  if (session) showSession(session)
+  else showList()
   return { showList, showSession }
 }

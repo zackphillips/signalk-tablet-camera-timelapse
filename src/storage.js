@@ -389,6 +389,50 @@ class Storage {
   }
 
   /**
+   * Frames with a position for the chart overlay, per session, for sessions
+   * whose last frame is at or after sinceMs (0: all). Sidecars are read once
+   * per session and cached until its file list changes, which covers every
+   * way frames come and go (capture, upload moves, pruning, deletes). The
+   * returned rev changes whenever any listed session does.
+   */
+  async photoSessions (sinceMs = 0) {
+    if (!this._photoCache) this._photoCache = new Map()
+    const names = new Map()
+    for (const dir of [this.queueDir, this.uploadedDir]) {
+      for (const s of await listDir(dir)) {
+        if (!s.isDirectory() || s.name === VIDEO_SESSION || s.name === 'test-shots' || !isValidSessionId(s.name)) continue
+        let set = names.get(s.name)
+        if (!set) { set = new Set(); names.set(s.name, set) }
+        for (const f of await listDir(path.join(dir, s.name))) {
+          if (f.isFile() && f.name.endsWith('.jpg')) set.add(f.name.slice(0, -4))
+        }
+      }
+    }
+    const out = []
+    const sigs = []
+    for (const [id, set] of names) {
+      if (!set.size) continue
+      const sorted = [...set].sort()
+      const last = sorted[sorted.length - 1]
+      if (sinceMs && Date.parse(frameTime(last)) < sinceMs) continue
+      const sig = `${id}:${sorted.length}:${sorted[0]}:${last}`
+      let hit = this._photoCache.get(id)
+      if (!hit || hit.sig !== sig) {
+        const frames = (await this.listFrames(id)) || []
+        hit = { sig, frames: frames.filter(f => f.position).map(f => ({ name: f.name, time: f.time, position: f.position })) }
+        this._photoCache.set(id, hit)
+      }
+      sigs.push(sig)
+      out.push({ id, frames: hit.frames })
+    }
+    for (const id of this._photoCache.keys()) if (!names.has(id)) this._photoCache.delete(id)
+    sigs.sort()
+    out.sort((a, b) => (a.id < b.id ? -1 : 1))
+    const rev = crypto.createHash('sha1').update(sigs.join('|')).digest('hex').slice(0, 16)
+    return { rev, sessions: out }
+  }
+
+  /**
    * Delete frames (jpg, sidecar, thumbnail) from queue and uploaded.
    * Returns the localKeys of the removed files, for Drive deletion.
    */
