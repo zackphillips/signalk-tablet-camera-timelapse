@@ -165,7 +165,7 @@ Everything is set up from the **Google Drive** section of the Timelapse panel (F
 2. Tap **Connect Google Drive**. It shows a code and `google.com/device`. Open that on your phone, enter the code and approve. The Pi waits for the approval itself, so you can close the panel.
 3. You may see Google's "unverified app" screen. Choose **Advanced → Go to … (unsafe)**. The app asks only for `drive.file`, which lets it see and change **only the files it created**, nothing else in your Drive.
 
-The plugin ships with a built-in Google client, so there is no Google Cloud setup. The sign-in token is stored on the Pi as `drive-token.json` (mode `0600`) and never logged. **Disconnect** revokes it with Google and deletes the file.
+A build with a built-in Google client (see below) needs no Google Cloud setup. This repository's build has none yet, so open **Advanced** first and enter your own client; the panel says so when it's needed. The sign-in token is stored on the Pi as `drive-token.json` (mode `0600`) and never logged. **Disconnect** revokes it with Google and deletes the file.
 
 Settings in the panel, stored on the Pi in `drive-settings.json` (mode `0600`) and shared by every tablet:
 
@@ -182,7 +182,7 @@ Changing anything takes effect at once. Changing the Google client means connect
 
 ### Advanced: your own Google client
 
-Under **Advanced** (collapsed) you can use your own Google Cloud client instead of the built-in one, for example if the built-in one ever stops working:
+Under **Advanced** (collapsed) you use your own Google Cloud client instead of a built-in one. It's needed when the build has no built-in client, or if the built-in one ever stops working:
 
 1. <https://console.cloud.google.com/>: create a project, then **APIs & Services → Library → Google Drive API → Enable**.
 2. **Google Auth Platform → Branding / Audience**: user type **External**, app name, your email.
@@ -193,7 +193,7 @@ Installs that had a client ID and secret in the plugin config keep using them un
 
 ### For the maintainer: the built-in client
 
-The built-in client lives in `src/drive/client.js`. It is created exactly like the steps above, from a personal (not work) Google account, with no billing account attached. Google treats device-flow clients as public, so the secret ships in the code by design (Google: such apps "cannot keep secrets confidential"). Notes:
+The built-in client lives in `src/drive/client.js`, empty in this repository. It is created exactly like the steps above, from a personal (not work) Google account, with no billing account attached. Google treats device-flow clients as public (such apps "cannot keep secrets confidential"), but GitHub push protection flags a Google client secret, so filling it in is a deliberate choice: allow it in the repository's secret scanning settings, or write the file in a publish step so it reaches the npm package without being committed. Notes:
 
 - Google deletes OAuth clients unused for six months. Every upload pass from any install counts as use.
 - The consent screen shows the project's app name and support email, so use an email alias.
