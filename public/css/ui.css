@@ -112,7 +112,7 @@ body.tl-transparent .tl-dot { border-color: rgba(10, 20, 32, 0.8); }
 .tl-settings section:last-of-type { border-bottom: 0; }
 .tl-settings h2 { font-size: 12px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.08em; color: var(--tl-muted); margin: 0 0 8px; }
 .tl-settings label { display: block; margin: 8px 0; color: var(--tl-muted); font-size: 13px; }
-.tl-settings select {
+.tl-settings select, .tl-settings input[type="number"] {
   display: block; width: 100%; margin-top: 4px; padding: 8px;
   background: var(--tl-field); color: var(--tl-fg);
   border: 1px solid var(--tl-line); border-radius: 8px; font: inherit; font-size: 15px;
@@ -137,13 +137,12 @@ body.tl-transparent .tl-dot { border-color: rgba(10, 20, 32, 0.8); }
 .tl-kv dt { color: var(--tl-muted); }
 .tl-kv dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; word-break: break-word; }
 .tl-kv dd.tl-warn { color: var(--tl-warn-fg); background: var(--tl-warn-bg); border-radius: 4px; padding: 0 4px; }
-.tl-preview, .tl-test-img { width: 100%; border-radius: 8px; margin-top: 8px; background: #000; display: block; }
-.tl-preview { aspect-ratio: 16 / 9; object-fit: contain; }
+.tl-test-img { width: 100%; border-radius: 8px; margin-top: 8px; background: #000; display: block; }
 /* Night mode (Freeboard or KIP): camera images would glare on a dark bridge. */
 /* Night: dim photos and video. Not inside Freeboard, whose night mode already
    filters the whole app (our windows included); a second filter blacks them out. */
-:root:not([data-host="freeboard"])[data-night] :is(.tl-preview, .tl-test-img, .tl-g-frame, .tl-g-card img, .tl-g-player, .tl-g-video video, .tl-v-img) { filter: brightness(0.35) sepia(0.6) hue-rotate(-30deg); }
-.tl-preview[hidden], .tl-test-img[hidden] { display: none; }
+:root:not([data-host="freeboard"])[data-night] :is(.tl-test-img, .tl-g-frame, .tl-g-card img, .tl-g-player, .tl-g-video video, .tl-v-img) { filter: brightness(0.35) sepia(0.6) hue-rotate(-30deg); }
+.tl-test-img[hidden] { display: none; }
 .tl-code { font: 600 24px/1.2 ui-monospace, Menlo, monospace; letter-spacing: 0.08em; color: var(--tl-fg); }
 .tl-toast { position: sticky; bottom: 8px; margin-top: 8px; padding: 10px 14px; border-radius: var(--tl-radius); background: var(--tl-fg); color: var(--tl-bg); font-size: 14px; }
 .tl-settings a { color: var(--tl-accent); }

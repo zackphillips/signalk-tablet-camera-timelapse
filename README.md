@@ -50,7 +50,7 @@ Enable the plugin and reload Freeboard. There's nothing to switch on inside Free
   | warning | Problem: camera denied, insecure context, Pi cache full, uploads failing, Drive not connected while frames are queued |
   | alarm | Pi disk space low, so frames are being rejected |
 
-- **Panel:** the Off/Auto/On switch, live status, camera and still-resolution pickers, a live preview (sent only while the panel is on screen), **Test shot**, and Google Drive connect and disconnect. It follows Freeboard's night mode. Photos are not dimmed a second time: Freeboard's night filter already covers its extension windows.
+- **Panel:** the Off/Auto/On switch, live status, the capture interval and timestamp, camera and still-resolution pickers, **Take test photo**, and Google Drive connect and disconnect. It follows Freeboard's night mode. Photos are not dimmed a second time: Freeboard's night filter already covers its extension windows.
 - **Widget** (optional): press and hold an empty corner cell on the chart, then pick **Timelapse**. Tap the widget to cycle Off → Auto → On. Press and hold it to open the settings, which also has **Remove widget**.
 
 Capture runs in Freeboard's background runtime, a hidden iframe that Freeboard keeps loaded while the plugin is enabled. It doesn't depend on the panel or widget being open.
@@ -112,6 +112,20 @@ The whole video is assembled in the tablet's memory before it is saved, so keep 
 
 The mode survives reloads and restarts according to `defaultMode`: Off, Auto or On at plugin start, or **Last used**.
 
+### Settings in the app
+
+Things you change often are in the app's settings (the Freeboard panel, the KIP page or the standalone page), not the server's plugin config:
+
+| Setting | Where it is kept |
+|---|---|
+| **Interval** (1–3600 s) | On the Pi (`settings.json` in the plugin data folder), for every tablet. Takes effect on the next frame. The plugin config value is the default until you change it here. |
+| **Timestamp on each photo**: off, or a corner | On the Pi, for every tablet. |
+| **Camera** and **Still resolution** | On this tablet (browser storage), since they depend on its cameras. |
+
+All of them survive reloads and restarts. Changing the Pi-side settings needs a read/write login. **Take test photo** takes one photo per press with the current camera, resolution and timestamp, saves it to the `test-shots` folder and shows it. There is no live preview, so the camera is only open while capturing or taking a test photo.
+
+**Timestamp.** The tablet draws the capture time in its own time zone (for example `2026-11-04 14:23:05 PST`) on a dark box in the chosen corner, scaled to about 3.5% of the image's short side, before the frame is uploaded. It is in the file on the Pi and in Drive and can't be removed later. Stamping decodes and re-encodes each frame at `jpegQuality`, which on a 12 MP frame costs a few hundred ms on the tablet. EXIF time and GPS are still written on the Pi. The gallery's video overlay is separate, so turn one of them off if you don't want the time twice.
+
 Capture pauses while the screen is off or another app is in front, and the status shows when the last pause happened. Keep the tablet plugged in with Freeboard or KIP in front. The engine holds a screen wake lock while it captures.
 
 ### Sessions
@@ -120,7 +134,7 @@ A session starts when capture starts and ends when it stops. The session ID is t
 
 ### Storage estimate
 
-At a 10 s interval you get 360 frames/hour. At about 3 MB per full-resolution frame that's about **1 GB/hour**. The panel shows the estimate from your measured frame size. Size `maxCacheMB` and the SD card for the longest offline stretch you expect.
+At a 10 s interval you get 360 frames/hour. At about 3 MB per full-resolution frame (Highest on a 12 MP camera) that's about **1 GB/hour**; at the default Lowest it is closer to 50 MB/hour. The panel shows the estimate from your measured frame size. Size `maxCacheMB` and the SD card for the longest offline stretch you expect.
 
 ## 7. Auto mode
 
@@ -243,6 +257,7 @@ All routes are under `/plugins/signalk-tablet-camera-timelapse/`. The Freeboard 
 |---|---|---|
 | POST | `/frames?session=&ts=&mode=&device=&w=&h=` | raw `image/jpeg` body. Returns 201, 200 (`duplicate`), 400, 413, 415 or 507 (`disk_low` or `cache_full`) |
 | GET/PUT | `/mode` | `{"mode":"off"\|"auto"\|"on"}` |
+| GET/PUT | `/settings` | app settings `{"intervalSeconds", "stamp"}`. PUT takes a partial object; `null` resets a field to its default |
 | GET | `/status` | mode, Auto evaluation, queue, cache, disk, Drive auth and uploader state, recent errors |
 | GET | `/config/client` | config subset for the capture engine |
 | POST | `/drive/auth/start` | starts the device flow and returns `userCode` and `verificationUrl` |
@@ -263,9 +278,10 @@ All routes are under `/plugins/signalk-tablet-camera-timelapse/`. The Freeboard 
 
 ## Tablet notes and open items
 
-- **Still resolution.** The engine prefers `ImageCapture.takePhoto()` at the chosen size and falls back to grabbing a frame from the video stream into a canvas. The panel's **Test shot** reports the real size, the method used (`takePhoto` or `canvas`) and the latency. Use it on the Tab Active4 Pro to confirm `takePhoto` gives full sensor resolution in Chrome. `jpegQuality` only applies when the browser encodes the image (the canvas fallback). `takePhoto` JPEGs come from the camera pipeline as they are.
+- **Still resolution.** The picker offers **Lowest** (the default) and **Highest**, which follow whichever camera is in use, then each exact size the current camera offers. An exact size is remembered for that camera only. On a 12 MP sensor Lowest is about 1000 × 750 (a quarter of the width, roughly 150 KB a frame), which caps video exports at that size; pick Highest or an exact size if you want 1080p or 4K timelapses.
+- **How stills are taken.** The engine prefers `ImageCapture.takePhoto()` at the chosen size and falls back to grabbing a frame from the video stream into a canvas. Some cameras ignore the requested size and return full resolution, so below the maximum the engine checks and scales the still down. **Take test photo** reports the real size, the method used (`takePhoto` or `canvas`) and the latency. Use it on the Tab Active4 Pro to confirm `takePhoto` gives full sensor resolution in Chrome at Highest. `jpegQuality` applies when the browser encodes the image (the canvas fallback, or a still it scaled down). Other `takePhoto` JPEGs come from the camera pipeline as they are.
 - **Camera inside Freeboard and KIP iframes.** Neither app's iframes set `allow="camera"`, and none need to: the server sends no Permissions-Policy, so Chrome's default allows the camera in same-origin frames, Freeboard's sandboxed extension frames included. I tested this in Chromium with permission already granted. The first-time permission prompt from inside the hidden Freeboard runtime still needs a check on the tablet. If it doesn't appear, grant the camera once from the standalone page at `/signalk-tablet-camera-timelapse/`; the permission is per origin, so Freeboard then has it too.
-- **Night mode.** Camera previews are dimmed in Freeboard and KIP night mode.
+- **Night mode.** Test photos and gallery images are dimmed in KIP and standalone night mode. In Freeboard they are not, because its night filter already dims extension windows.
 - **Video export on the tablet.** Tested with Chromium's H.264 encoder (`avc1.640033`). Chrome on Android normally has a hardware H.264 encoder; if not, the gallery falls back to VP9 or says no encoder fits and suggests a smaller size. Check one 1080p export on the Tab Active4 Pro.
 - **Power.** The camera stays open in On and Auto modes, including while Auto waits, so focus and exposure stay settled. In Off mode, or while the page is hidden, the camera is closed.
 

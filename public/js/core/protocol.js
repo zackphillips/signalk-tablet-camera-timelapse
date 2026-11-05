@@ -3,14 +3,12 @@
 // BroadcastChannel reaches every one, whichever host iframe it lives in.
 //
 // engine -> UIs   { t: 'state', s }            full state, on change + every 2 s
-//                 { t: 'frame', blob }          preview JPEG while a UI asks
 //                 { t: 'testResult', id, ... }  answer to testShot
 // UIs -> engine   { t: 'hello' }                ask for state now
-//                 { t: 'refresh' }              re-read server status/mode now
-//                 { t: 'preview' }              keep preview frames coming (~1 s)
+//                 { t: 'refresh' }              re-read server status, mode and settings now
 //                 { t: 'testShot', id }
 //                 { t: 'setCamera', id }
-//                 { t: 'setResolution', w, h }
+//                 { t: 'setResolution', choice: 'lowest'|'highest' } or { t: 'setResolution', w, h }
 
 export const CHANNEL = 'signalk-tablet-camera-timelapse'
 export const LOCK = 'signalk-tablet-camera-timelapse-engine'

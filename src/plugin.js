@@ -11,6 +11,7 @@ const { DriveTarget } = require('./drive/target')
 const { Uploader } = require('./uploader')
 const { snapshot, buildSidecar, addExif } = require('./metadata')
 const { photoFeatures } = require('./photomap')
+const AppSettings = require('./appsettings')
 const Auto = require('../public/js/auto')
 
 const MODES = ['off', 'auto', 'on']
@@ -90,6 +91,14 @@ module.exports = function (app) {
 
   function modeFile () { return path.join(dataDir, 'mode.json') }
 
+  // ---------- settings changed from the app ----------
+  let appStored = {}
+  function settingsFile () { return path.join(dataDir, 'settings.json') }
+  function loadAppSettings () {
+    try { appStored = AppSettings.sanitizeStored(JSON.parse(fs.readFileSync(settingsFile(), 'utf8'))) } catch (e) { appStored = {} }
+  }
+  const settings = () => AppSettings.effective(appStored, opts)
+
   async function saveMode () {
     try {
       await atomicWrite(modeFile(), JSON.stringify({ mode: state.mode, at: state.modeChangedAt }))
@@ -116,7 +125,7 @@ module.exports = function (app) {
 
   function capturing () {
     if (!state.lastFrameAt) return false
-    return Date.now() - state.lastFrameAt < Math.max(3 * opts.intervalSeconds * 1000, 30000)
+    return Date.now() - state.lastFrameAt < Math.max(3 * settings().intervalSeconds * 1000, 30000)
   }
 
   function startAuto () {
@@ -193,6 +202,7 @@ module.exports = function (app) {
       lastFrameAt: state.lastFrameAt ? new Date(state.lastFrameAt).toISOString() : null,
       framesReceived: state.framesReceived,
       avgFrameBytes: state.avgFrameBytes,
+      settings: settings(),
       auto: evaluator
         ? { configured: true, ...autoState, activeSince: autoState && autoState.activeSince ? new Date(autoState.activeSince).toISOString() : null, lastUpdateAt: autoState && autoState.lastUpdateAt ? new Date(autoState.lastUpdateAt).toISOString() : null }
         : { configured: false },
@@ -251,6 +261,7 @@ module.exports = function (app) {
   plugin.start = function (options) {
     opts = withDefaults(options)
     dataDir = app.getDataDirPath()
+    loadAppSettings()
     const storagePath = opts.storagePath && opts.storagePath.trim() ? opts.storagePath.trim() : path.join(dataDir, 'frames')
 
     state.mode = opts.defaultMode === 'last' ? loadLastMode() : (MODES.includes(opts.defaultMode) ? opts.defaultMode : 'off')
@@ -356,7 +367,8 @@ module.exports = function (app) {
       res.json({
         pluginId: plugin.id,
         webappPath: WEBAPP_PATH,
-        intervalSeconds: opts.intervalSeconds,
+        intervalSeconds: settings().intervalSeconds,
+        stamp: settings().stamp,
         jpegQuality: opts.jpegQuality,
         proxyWidth: opts.proxyWidth,
         auto: { configured: Auto.isConfigured(autoConfig()), ...autoConfig() },
@@ -383,6 +395,33 @@ module.exports = function (app) {
         updateStatus()
       }
       res.json({ mode: state.mode, modeChangedAt: state.modeChangedAt })
+    })
+
+    r('readonly').get('/settings', (req, res) => {
+      if (!ready(res)) return
+      res.json({ settings: settings(), defaults: AppSettings.effective({}, opts), overridden: Object.keys(appStored) })
+    })
+
+    // Partial update, e.g. {"intervalSeconds": 5} or {"stamp": null} to go back to the default.
+    r('readwrite').put('/settings', async (req, res) => {
+      if (!ready(res)) return
+      let body = req.body
+      if (!body || typeof body !== 'object' || Buffer.isBuffer(body)) {
+        try { body = JSON.parse((await readBody(req, 4096)).toString() || '{}') } catch (e) { return fail(res, 400, 'body must be JSON') }
+      }
+      const r = AppSettings.parseUpdate(body)
+      if (r.error) return fail(res, 400, r.error)
+      const next = AppSettings.applyUpdate(appStored, r.value)
+      try {
+        await atomicWrite(settingsFile(), JSON.stringify(next, null, 2))
+      } catch (e) {
+        recordError(`saving settings: ${e.message}`)
+        return fail(res, 500, 'could not save settings')
+      }
+      appStored = next
+      app.debug(`app settings: ${JSON.stringify(settings())}`)
+      updateStatus()
+      res.json({ settings: settings(), defaults: AppSettings.effective({}, opts), overridden: Object.keys(appStored) })
     })
 
     r('readonly').get('/status', (req, res) => {
@@ -521,7 +560,7 @@ module.exports = function (app) {
       const frames = await storage.listFrames(req.params.id)
       if (!frames) return fail(res, 400, 'invalid session id')
       if (!frames.length) return fail(res, 404, 'no such session')
-      res.json({ id: req.params.id, frames, intervalSeconds: opts.intervalSeconds })
+      res.json({ id: req.params.id, frames, intervalSeconds: settings().intervalSeconds })
     })
 
     r('readonly').get('/sessions/:id/frames/:name', (req, res) => {

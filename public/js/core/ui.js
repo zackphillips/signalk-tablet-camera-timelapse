@@ -10,7 +10,6 @@ const MODES = ['off', 'auto', 'on']
 // ---------- engine client ----------
 export function createEngineClient () {
   const listeners = new Set()
-  const frameListeners = new Set()
   const pending = new Map()
   let state = null
   let lastAt = 0
@@ -19,8 +18,6 @@ export function createEngineClient () {
       state = m.s
       lastAt = Date.now()
       listeners.forEach(fn => fn(state))
-    } else if (m.t === 'frame') {
-      frameListeners.forEach(fn => fn(m.blob))
     } else if (m.t === 'testResult' && pending.has(m.id)) {
       pending.get(m.id)(m)
       pending.delete(m.id)
@@ -36,7 +33,6 @@ export function createEngineClient () {
     get state () { return state },
     alive,
     onState (fn) { listeners.add(fn); if (state) fn(state); return () => listeners.delete(fn) },
-    onFrame (fn) { frameListeners.add(fn); return () => frameListeners.delete(fn) },
     send (m) { ch.postMessage(m) },
     testShot () {
       const id = Math.random().toString(36).slice(2)
@@ -134,6 +130,27 @@ function escapeHtml (s) {
 
 const CAMERA_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M9 4.5 7.6 6.5H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-9a2 2 0 0 0-2-2h-2.6L15 4.5H9Zm3 4a4.5 4.5 0 1 1 0 9 4.5 4.5 0 0 1 0-9Zm0 1.8a2.7 2.7 0 1 0 0 5.4 2.7 2.7 0 0 0 0-5.4Z"/></svg>'
 
+/**
+ * Still-size picker entries: Lowest and Highest (which follow the camera in
+ * use), then each exact size this camera offers.
+ */
+export function resolutionOptions (list) {
+  if (!list.length) return []
+  const area = (r) => r.w * r.h
+  const sorted = [...list].sort((a, b) => area(b) - area(a))
+  const dims = (r) => `${r.w} × ${r.h}${r.src === 'video' ? ' · video frame' : ''}`
+  return [
+    { value: 'lowest', text: `Lowest (${dims(sorted[sorted.length - 1])})` },
+    { value: 'highest', text: `Highest (${dims(sorted[0])})` },
+    ...sorted.map(r => ({ value: `${r.w}x${r.h}`, text: dims(r) }))
+  ]
+}
+
+export function resolutionValue (c) {
+  if (c.resChoice === 'lowest' || c.resChoice === 'highest') return c.resChoice
+  return c.resolution ? `${c.resolution.w}x${c.resolution.h}` : 'lowest'
+}
+
 export function insecureHelp () {
   return `Chrome only allows the camera on HTTPS or on an origin you trust. On a dedicated tablet, open <code>chrome://flags/#unsafely-treat-insecure-origin-as-secure</code>, add <code>${escapeHtml(location.origin)}</code>, enable it and restart Chrome. Otherwise enable HTTPS on the Signal K server with a locally trusted CA.`
 }
@@ -208,7 +225,15 @@ export function mountCompact (root, client, { onLongPress, showLine = true } = {
 }
 
 // ---------- full settings view ----------
-export function mountSettings (root, client, { previewActive = () => true, openGallery } = {}) {
+const STAMPS = [
+  ['off', 'Off'],
+  ['bottom-left', 'Bottom left'],
+  ['bottom-right', 'Bottom right'],
+  ['top-left', 'Top left'],
+  ['top-right', 'Top right']
+]
+
+export function mountSettings (root, client, { openGallery } = {}) {
   root.classList.add('tl-settings')
   root.innerHTML = ''
 
@@ -226,11 +251,33 @@ export function mountSettings (root, client, { previewActive = () => true, openG
   const resSel = h('select', { 'aria-label': 'Resolution' })
   camSel.addEventListener('change', () => client.send({ t: 'setCamera', id: camSel.value }))
   resSel.addEventListener('change', () => {
+    if (resSel.value === 'lowest' || resSel.value === 'highest') return client.send({ t: 'setResolution', choice: resSel.value })
     const [w, hh] = resSel.value.split('x').map(Number)
     client.send({ t: 'setResolution', w, h: hh })
   })
-  const preview = h('img', { class: 'tl-preview', alt: 'Camera preview' })
-  const testBtn = h('button', { type: 'button', class: 'tl-primary', text: 'Test shot' })
+  // Capture settings live on the Pi (shared by every tablet, kept across
+  // reloads). Saved on change; the engine picks them up at once.
+  const intervalIn = h('input', { type: 'number', min: 1, max: 3600, step: 1, inputmode: 'decimal', 'aria-label': 'Interval in seconds' })
+  const stampSel = h('select', { 'aria-label': 'Timestamp' })
+  for (const [v, t] of STAMPS) stampSel.append(h('option', { value: v, text: t }))
+  const saveFail = (e) => toast(e.status === 401 || e.status === 403 ? 'Changing settings needs a read/write login' : e.message)
+  async function saveSetting (patch) {
+    try {
+      await API.putSettings(patch)
+      client.send({ t: 'refresh' })
+    } catch (e) {
+      saveFail(e)
+      if (client.state) render(client.state) // put the stored value back
+    }
+  }
+  intervalIn.addEventListener('change', () => {
+    const v = Number(intervalIn.value)
+    if (!(v >= 1 && v <= 3600)) { toast('Interval must be 1 to 3600 s'); return render(client.state) }
+    saveSetting({ intervalSeconds: v })
+  })
+  stampSel.addEventListener('change', () => saveSetting({ stamp: stampSel.value }))
+
+  const testBtn = h('button', { type: 'button', class: 'tl-primary', text: 'Take test photo' })
   const testResult = h('span', { class: 'tl-hint' })
   const testImg = h('img', { class: 'tl-test-img', alt: 'Last test shot', hidden: true })
   const estimate = h('p', { class: 'tl-hint' })
@@ -266,27 +313,18 @@ export function mountSettings (root, client, { previewActive = () => true, openG
     h('section', {}, modeSeg, autoDesc, galleryBtn),
     problem,
     h('section', {}, h('h2', { text: 'Status' }), statusList),
+    h('section', {}, h('h2', { text: 'Capture' }),
+      h('label', {}, 'Interval (seconds)', intervalIn),
+      h('label', {}, 'Timestamp on each photo', stampSel),
+      estimate),
     h('section', {}, h('h2', { text: 'Camera' }),
       h('label', {}, 'Camera', camSel),
       h('label', {}, 'Still resolution', resSel),
-      preview,
       h('div', { class: 'tl-row' }, testBtn, testResult),
-      testImg,
-      estimate),
+      testImg),
     h('section', {}, h('h2', { text: 'Google Drive' }), driveBox),
     toastEl
   )
-
-  // Preview frames from the engine, only while this view is on screen.
-  let lastUrl = null
-  client.onFrame((blob) => {
-    if (!previewActive()) return
-    const url = URL.createObjectURL(blob)
-    preview.onload = () => { if (lastUrl) URL.revokeObjectURL(lastUrl); lastUrl = url }
-    preview.src = url
-  })
-  setInterval(() => { if (previewActive() && document.visibilityState === 'visible') client.send({ t: 'preview' }) }, 1000)
-  if (previewActive()) client.send({ t: 'preview' })
 
   function fillSelect (sel, items, value) {
     const sig = JSON.stringify(items) + value
@@ -343,12 +381,18 @@ export function mountSettings (root, client, { previewActive = () => true, openG
 
     const c = s.camera
     fillSelect(camSel, c.cameras.map(x => ({ value: x.id, text: x.label })), c.cameraId)
-    fillSelect(resSel, c.resolutions.map((r, i) => ({ value: `${r.w}x${r.h}`, text: `${r.w} × ${r.h}${i === 0 ? ' (max)' : ''}${r.src === 'video' ? ' · video frame' : ''}` })),
-      c.resolution ? `${c.resolution.w}x${c.resolution.h}` : null)
+    fillSelect(resSel, resolutionOptions(c.resolutions), resolutionValue(c))
     camSel.disabled = !c.cameras.length
     resSel.disabled = !c.resolutions.length
     testBtn.disabled = !alive || !s.secure
-    preview.hidden = !c.open
+
+    // Prefer the server's copy (fresh after a save); the engine's otherwise.
+    const set = (st && st.settings) || s.cfg
+    if (set) {
+      if (document.activeElement !== intervalIn) intervalIn.value = String(set.intervalSeconds)
+      stampSel.value = set.stamp || 'off'
+    }
+    intervalIn.disabled = stampSel.disabled = !set
 
     if (s.cfg) {
       const perHour = Math.round(3600 / s.cfg.intervalSeconds)
