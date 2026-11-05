@@ -12,6 +12,8 @@ const { Uploader } = require('./uploader')
 const { snapshot, buildSidecar, addExif } = require('./metadata')
 const { photoFeatures } = require('./photomap')
 const AppSettings = require('./appsettings')
+const DriveSettings = require('./drivesettings')
+const BUILTIN_CLIENT = require('./drive/client')
 const Auto = require('../public/js/auto')
 
 const MODES = ['off', 'auto', 'on']
@@ -99,6 +101,45 @@ module.exports = function (app) {
   }
   const settings = () => AppSettings.effective(appStored, opts)
 
+  // Drive settings changed from the app (drive-settings.json, 0600).
+  let driveStored = {}
+  function driveSettingsFile () { return path.join(dataDir, 'drive-settings.json') }
+  function loadDriveSettings () {
+    try { driveStored = DriveSettings.sanitizeStored(JSON.parse(fs.readFileSync(driveSettingsFile(), 'utf8'))) } catch (e) { driveStored = {} }
+  }
+  const drive = () => DriveSettings.resolve(driveStored, opts, BUILTIN_CLIENT)
+
+  function makeAuth (d) {
+    return new DriveAuth({
+      dataDir,
+      clientId: d.clientId,
+      clientSecret: d.clientSecret,
+      log,
+      onChange: (ev) => {
+        if (ev === 'authorized' && uploader) uploader.kick()
+        updateStatus()
+      }
+    })
+  }
+
+  /** Apply changed Drive settings to the running storage, login and uploader. */
+  function applyDrive (prev, next) {
+    storage.afterUploadMode = next.afterUpload
+    storage.keepUploadedDays = next.keepUploadedDays
+    if (prev.clientId !== next.clientId || prev.clientSecret !== next.clientSecret) {
+      // New credentials: a stored token for the old client is ignored (needs_auth).
+      auth.stop()
+      auth = makeAuth(next)
+      target.auth = auth
+    }
+    target.rootName = next.folderName
+    if (prev.shareLinks !== next.shareLinks) target.resetShareRefusals()
+    if (next.enabled && !prev.enabled) uploader.start()
+    else if (!next.enabled && prev.enabled) uploader.stop()
+    else uploader.kick()
+    updateStatus()
+  }
+
   async function saveMode () {
     try {
       await atomicWrite(modeFile(), JSON.stringify({ mode: state.mode, at: state.modeChangedAt }))
@@ -175,7 +216,7 @@ module.exports = function (app) {
     if (storage) parts.push(`queue ${storage.stats.queueCount} files / ${(storage.stats.queueBytes / 1048576).toFixed(0)} MB`)
     const blocker = storage && storage.ingestBlocker()
     if (blocker) parts.push(blocker === 'disk_low' ? 'DISK LOW' : 'CACHE FULL')
-    if (opts.drive.enabled && auth) {
+    if (drive().enabled && auth) {
       const s = auth.status()
       if (s.state === 'pending') parts.push(`Drive: open ${s.verificationUrl} and enter ${s.userCode}`)
       else if (s.state === 'authorized') parts.push(`Drive ${uploader ? uploader.state : 'ok'}`)
@@ -186,7 +227,7 @@ module.exports = function (app) {
 
   function updateStatus () {
     const blocker = storage && storage.ingestBlocker()
-    const driveBad = opts.drive.enabled && auth && ['needs_auth', 'unconfigured'].includes(auth.state())
+    const driveBad = drive().enabled && auth && ['needs_auth', 'unconfigured'].includes(auth.state())
     if (blocker || driveBad) app.setPluginError(summary())
     else app.setPluginStatus(summary())
   }
@@ -212,10 +253,12 @@ module.exports = function (app) {
       disk: { freeBytes: free, minFreeBytes: storage ? storage.minFreeBytes : null, low: blocker === 'disk_low' },
       ingestBlocked: blocker,
       drive: {
-        enabled: !!opts.drive.enabled,
+        enabled: !!drive().enabled,
         auth: auth ? auth.status() : { state: 'unconfigured' },
         uploader: uploader ? uploader.status() : null,
-        folderName: opts.drive.folderName
+        folderName: drive().folderName,
+        clientSource: drive().clientSource,
+        shareLinks: drive().shareLinks
       },
       errors: state.errors
     }
@@ -262,6 +305,8 @@ module.exports = function (app) {
     opts = withDefaults(options)
     dataDir = app.getDataDirPath()
     loadAppSettings()
+    loadDriveSettings()
+    const d0 = drive()
     const storagePath = opts.storagePath && opts.storagePath.trim() ? opts.storagePath.trim() : path.join(dataDir, 'frames')
 
     state.mode = opts.defaultMode === 'last' ? loadLastMode() : (MODES.includes(opts.defaultMode) ? opts.defaultMode : 'off')
@@ -270,24 +315,15 @@ module.exports = function (app) {
 
     storage = new Storage({
       storagePath,
-      afterUpload: opts.afterUpload,
-      keepUploadedDays: opts.keepUploadedDays,
+      afterUpload: d0.afterUpload,
+      keepUploadedDays: d0.keepUploadedDays,
       minFreeDiskMB: opts.minFreeDiskMB,
       maxCacheMB: opts.maxCacheMB,
       log
     })
 
-    auth = new DriveAuth({
-      dataDir,
-      clientId: opts.drive.clientId,
-      clientSecret: opts.drive.clientSecret,
-      log,
-      onChange: (ev) => {
-        if (ev === 'authorized' && uploader) uploader.kick()
-        updateStatus()
-      }
-    })
-    target = new DriveTarget({ auth, folderCachePath: path.join(dataDir, 'drive-folders.json'), rootName: opts.drive.folderName, log })
+    auth = makeAuth(d0)
+    target = new DriveTarget({ auth, folderCachePath: path.join(dataDir, 'drive-folders.json'), rootName: d0.folderName, log, share: () => drive().shareLinks })
     uploader = new Uploader({
       storage,
       target,
@@ -311,7 +347,7 @@ module.exports = function (app) {
         await storage.pruneUploaded()
         await storage.evictForCap()
         state.lastPruneAt = Date.now()
-        if (opts.drive.enabled && started) uploader.start()
+        if (drive().enabled && started) uploader.start()
         publishDeltas()
         updateStatus()
       })
@@ -372,7 +408,7 @@ module.exports = function (app) {
         jpegQuality: opts.jpegQuality,
         proxyWidth: opts.proxyWidth,
         auto: { configured: Auto.isConfigured(autoConfig()), ...autoConfig() },
-        driveEnabled: !!opts.drive.enabled,
+        driveEnabled: !!drive().enabled,
         mode: state.mode
       })
     })
@@ -495,6 +531,37 @@ module.exports = function (app) {
       }
     })
 
+    const driveView = () => ({ settings: DriveSettings.publicView(drive()), defaults: DriveSettings.publicView(DriveSettings.resolve({}, opts, BUILTIN_CLIENT)) })
+
+    r('readonly').get('/drive/settings', (req, res) => {
+      if (!ready(res)) return
+      res.json(driveView())
+    })
+
+    // Partial update; null resets a field to the plugin config default. The
+    // client secret is write-only: it is never returned.
+    r('readwrite').put('/drive/settings', async (req, res) => {
+      if (!ready(res)) return
+      let body = req.body
+      if (!body || typeof body !== 'object' || Buffer.isBuffer(body)) {
+        try { body = JSON.parse((await readBody(req, 8192)).toString() || '{}') } catch (e) { return fail(res, 400, 'body must be JSON') }
+      }
+      const r = DriveSettings.parseUpdate(body)
+      if (r.error) return fail(res, 400, r.error)
+      const prev = drive()
+      const next = DriveSettings.applyUpdate(driveStored, r.value)
+      try {
+        await atomicWrite(driveSettingsFile(), JSON.stringify(next, null, 2), { mode: 0o600 })
+      } catch (e) {
+        recordError(`saving Drive settings: ${e.message}`)
+        return fail(res, 500, 'could not save Drive settings')
+      }
+      driveStored = next
+      applyDrive(prev, drive())
+      app.debug(`Drive settings: ${JSON.stringify(DriveSettings.publicView(drive()))}`)
+      res.json(driveView())
+    })
+
     r('readwrite').post('/drive/auth/start', async (req, res) => {
       if (!ready(res)) return
       try {
@@ -530,7 +597,7 @@ module.exports = function (app) {
     }
     const wantDrive = (req) => {
       const b = req.body && typeof req.body === 'object' && !Buffer.isBuffer(req.body) ? req.body : {}
-      return !!opts.drive.enabled && (b.drive === true || req.query.drive === '1' || req.query.drive === 'true')
+      return !!drive().enabled && (b.drive === true || req.query.drive === '1' || req.query.drive === 'true')
     }
 
     // Small thumbnail the capture engine sends after each frame, for the gallery.
@@ -551,7 +618,9 @@ module.exports = function (app) {
     r('readonly').get('/sessions', async (req, res) => {
       if (!ready(res)) return
       try {
-        res.json({ sessions: await storage.listSessions(), videos: await storage.listVideos(), afterUpload: opts.afterUpload, keepUploadedDays: opts.keepUploadedDays, driveEnabled: !!opts.drive.enabled, proxyWidth: opts.proxyWidth })
+        const d = drive()
+        const sessions = (await storage.listSessions()).map(s => ({ ...s, driveUrl: target.folderUrl(s.id), driveShared: target.isShared(s.id) }))
+        res.json({ sessions, videos: await storage.listVideos(), videosDriveUrl: target.folderUrl(VIDEO_SESSION), afterUpload: d.afterUpload, keepUploadedDays: d.keepUploadedDays, driveEnabled: !!d.enabled, shareLinks: d.shareLinks, proxyWidth: opts.proxyWidth })
       } catch (e) { fail(res, 500, e.message) }
     })
 
@@ -560,7 +629,7 @@ module.exports = function (app) {
       const frames = await storage.listFrames(req.params.id)
       if (!frames) return fail(res, 400, 'invalid session id')
       if (!frames.length) return fail(res, 404, 'no such session')
-      res.json({ id: req.params.id, frames, intervalSeconds: settings().intervalSeconds })
+      res.json({ id: req.params.id, frames, intervalSeconds: settings().intervalSeconds, driveUrl: target.folderUrl(req.params.id), driveShared: target.isShared(req.params.id) })
     })
 
     r('readonly').get('/sessions/:id/frames/:name', (req, res) => {
@@ -637,8 +706,8 @@ module.exports = function (app) {
       const free = storage.freeBytes()
       if (len && free !== null && free - len < storage.minFreeBytes) { req.resume(); return fail(res, 507, 'disk_low') }
       try {
-        const v = await storage.saveVideo(String(req.query.name || ''), req, { limit: MAX_VIDEO_BYTES, forUpload: !!opts.drive.enabled && req.query.drive !== '0' })
-        if (opts.drive.enabled) uploader.kick()
+        const v = await storage.saveVideo(String(req.query.name || ''), req, { limit: MAX_VIDEO_BYTES, forUpload: !!drive().enabled && req.query.drive !== '0' })
+        if (drive().enabled) uploader.kick()
         res.status(201).json({ ok: true, ...v, url: `/plugins/${plugin.id}/videos/${encodeURIComponent(v.name)}` })
       } catch (e) {
         fail(res, e.status || 500, e.message)

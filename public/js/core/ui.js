@@ -296,7 +296,76 @@ export function mountSettings (root, client, { openGallery } = {}) {
     testImg.hidden = false
   })
 
-  const driveBox = h('div')
+  // ---------- Google Drive ----------
+  const driveBox = h('div') // connection state: connect, code, connected
+  const driveOn = h('input', { type: 'checkbox' })
+  const shareCb = h('input', { type: 'checkbox' })
+  const folderIn = h('input', { type: 'text', maxlength: 100, 'aria-label': 'Drive folder' })
+  const afterSel = h('select', { 'aria-label': 'After upload' })
+  for (const [v, t] of [['move', 'Keep on the Pi for a while, then delete'], ['delete', 'Delete from the Pi right away'], ['keep', 'Keep on the Pi forever']]) afterSel.append(h('option', { value: v, text: t }))
+  const keepIn = h('input', { type: 'number', min: 0, max: 3650, step: 1, 'aria-label': 'Days to keep on the Pi' })
+  const keepLabel = h('label', {}, 'Days to keep on the Pi', keepIn)
+  const ownCb = h('input', { type: 'checkbox' })
+  const ownIdIn = h('input', { type: 'text', autocomplete: 'off', spellcheck: 'false', 'aria-label': 'Client ID' })
+  const ownSecretIn = h('input', { type: 'password', autocomplete: 'new-password', 'aria-label': 'Client secret' })
+  const ownSave = h('button', { type: 'button', text: 'Save credentials' })
+  const driveOpts = h('div', {},
+    h('label', { class: 'tl-check' }, shareCb, 'Anyone with the link can view'),
+    h('p', { class: 'tl-hint', text: 'Each session folder in Drive gets a view link (shown in Photos & videos). Photos carry the boat\'s GPS position.' }),
+    h('label', {}, 'Drive folder', folderIn),
+    h('label', {}, 'After upload', afterSel),
+    keepLabel)
+  const advanced = h('details', { class: 'tl-advanced' },
+    h('summary', { text: 'Advanced' }),
+    h('label', { class: 'tl-check' }, ownCb, 'Use my own Google Cloud client'),
+    h('p', { class: 'tl-hint', text: 'Only needed if the built-in client stops working. Create an OAuth client of type "TVs and Limited Input devices" in Google Cloud; the README has the steps. Changing the client means connecting again.' }),
+    h('label', {}, 'Client ID', ownIdIn),
+    h('label', {}, 'Client secret', ownSecretIn),
+    h('div', { class: 'tl-row' }, ownSave))
+  let driveSet = null
+  async function loadDriveSettings () {
+    try { driveSet = (await API.getDriveSettings()).settings } catch (e) { driveSet = null }
+    renderDriveSettings()
+  }
+  async function saveDrive (patch, okMsg) {
+    try {
+      driveSet = (await API.putDriveSettings(patch)).settings
+      if (okMsg) toast(okMsg)
+      client.send({ t: 'refresh' })
+    } catch (e) {
+      toast(e.status === 401 || e.status === 403 ? 'Changing Drive settings needs a read/write login' : e.message)
+    }
+    renderDriveSettings()
+  }
+  function renderDriveSettings () {
+    const d = driveSet
+    for (const el of [driveOn, shareCb, folderIn, afterSel, keepIn, ownCb, ownIdIn, ownSecretIn, ownSave]) el.disabled = !d
+    if (!d) return
+    driveOn.checked = d.enabled
+    driveOpts.hidden = !d.enabled
+    shareCb.checked = d.shareLinks
+    if (document.activeElement !== folderIn) folderIn.value = d.folderName
+    afterSel.value = d.afterUpload
+    if (document.activeElement !== keepIn) keepIn.value = String(d.keepUploadedDays)
+    keepLabel.hidden = d.afterUpload !== 'move'
+    ownCb.checked = d.useOwnClient
+    if (document.activeElement !== ownIdIn) ownIdIn.value = d.ownClientId || ''
+    ownSecretIn.placeholder = d.hasOwnSecret ? 'saved (enter to replace)' : ''
+  }
+  driveOn.addEventListener('change', () => saveDrive({ enabled: driveOn.checked }))
+  shareCb.addEventListener('change', () => saveDrive({ shareLinks: shareCb.checked }, shareCb.checked ? 'Session folders will be viewable by link' : 'Link sharing will be removed from session folders'))
+  folderIn.addEventListener('change', () => saveDrive({ folderName: folderIn.value }))
+  afterSel.addEventListener('change', () => saveDrive({ afterUpload: afterSel.value }))
+  keepIn.addEventListener('change', () => saveDrive({ keepUploadedDays: Number(keepIn.value) }))
+  ownCb.addEventListener('change', () => saveDrive({ useOwnClient: ownCb.checked }))
+  ownSave.addEventListener('click', () => {
+    const patch = { clientId: ownIdIn.value }
+    if (ownSecretIn.value) patch.clientSecret = ownSecretIn.value
+    ownSecretIn.value = ''
+    saveDrive(patch, 'Credentials saved')
+  })
+  loadDriveSettings()
+  client.send({ t: 'probe' }) // fill the camera and resolution pickers
   const toastEl = h('div', { class: 'tl-toast', hidden: true })
   let toastTimer
   function toast (msg) {
@@ -322,7 +391,9 @@ export function mountSettings (root, client, { openGallery } = {}) {
       h('label', {}, 'Still resolution', resSel),
       h('div', { class: 'tl-row' }, testBtn, testResult),
       testImg),
-    h('section', {}, h('h2', { text: 'Google Drive' }), driveBox),
+    h('section', {}, h('h2', { text: 'Google Drive' }),
+      h('label', { class: 'tl-check' }, driveOn, 'Upload to Google Drive'),
+      driveBox, driveOpts, advanced),
     toastEl
   )
 
@@ -403,11 +474,16 @@ export function mountSettings (root, client, { openGallery } = {}) {
   }
 
   let drivePoll = null
+  let driveStatusSig = null
   function renderDrive (st) {
     if (!st) { driveBox.textContent = 'Server unreachable.'; return }
-    if (!st.drive.enabled) { driveBox.innerHTML = '<p class="tl-hint">Drive upload is off in the plugin config. Frames stay on the Pi.</p>'; return }
+    // Another tablet changed the Drive settings: fetch them again.
+    const ss = JSON.stringify([st.drive.enabled, st.drive.folderName, st.drive.shareLinks, st.drive.clientSource])
+    if (driveStatusSig !== null && ss !== driveStatusSig) loadDriveSettings()
+    driveStatusSig = ss
+    if (!st.drive.enabled) { driveBox.dataset.sig = ''; driveBox.innerHTML = '<p class="tl-hint">Off. Frames stay on the Pi.</p>'; return }
     const a = st.drive.auth
-    const sig = JSON.stringify(a) + (st.drive.uploader && st.drive.uploader.state)
+    const sig = JSON.stringify(a) + (st.drive.uploader && st.drive.uploader.state) + st.drive.clientSource
     if (driveBox.dataset.sig === sig) return
     driveBox.dataset.sig = sig
     driveBox.innerHTML = ''
@@ -415,7 +491,9 @@ export function mountSettings (root, client, { openGallery } = {}) {
     const btn = (text, fn, cls) => h('button', { type: 'button', class: cls, text, onclick: fn })
     const fail = (e) => toast(e.status === 401 || e.status === 403 ? 'Needs a read/write login' : e.message)
     if (a.state === 'unconfigured') {
-      p('Enter a Google OAuth client ID and secret in the plugin config (Server → Plugin Config). See the README.')
+      p(st.drive.clientSource === 'none' && driveSet && !driveSet.useOwnClient
+        ? 'This version has no built-in Google client. Open Advanced below and enter your own.'
+        : 'Enter your Google client ID and secret under Advanced below.')
     } else if (a.state === 'pending') {
       p(`On your phone, open <a href="${escapeHtml(a.verificationUrl)}" target="_blank" rel="noopener">${escapeHtml(a.verificationUrl)}</a> and enter:`)
       p(escapeHtml(a.userCode), 'tl-code')

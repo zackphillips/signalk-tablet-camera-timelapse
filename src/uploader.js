@@ -201,6 +201,7 @@ class Uploader {
     let fatal = null
     try {
       if (this.deletes.length && this.target.trash) await this.processDeletes()
+      if (this.target.syncAllSharing) await this.target.syncAllSharing()
       const items = await this.storage.scanQueue()
       let i = 0
       const worker = async () => {

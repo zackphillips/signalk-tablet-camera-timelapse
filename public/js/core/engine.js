@@ -107,6 +107,7 @@ export async function startEngine ({ host }) {
       case 'setCamera': await cam.setCamera(m.id); reconcile(); break
       case 'setResolution': await (m.choice ? cam.setResolution(m.choice) : cam.setResolution(m.w, m.h)); break
       case 'testShot': testShot(m.id); break
+      case 'probe': probeCamera(); break
     }
   }
 
@@ -306,6 +307,14 @@ export async function startEngine ({ host }) {
       busy = false
       reconcile()
     }
+  }
+
+  // A settings view opened and the camera list is unknown: open the camera
+  // once to learn the cameras and still sizes, then let reconcile close it.
+  let probing = null
+  function probeCamera () {
+    if (probing || cam.state.stream || cam.state.resolutions.length || document.visibilityState !== 'visible') return
+    probing = cam.open().catch(() => {}).finally(() => { probing = null; reconcile() })
   }
 
   // ---------- wake lock ----------

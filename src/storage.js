@@ -503,7 +503,15 @@ class Storage {
     await new Promise((resolve, reject) => {
       const out = fs.createWriteStream(tmp)
       let failed = false
-      const fail = (e) => { if (failed) return; failed = true; out.destroy(); reject(e) }
+      // Reject only once the stream has closed: destroyed before its open()
+      // finished, it would still create the file after we deleted it.
+      const fail = (e) => {
+        if (failed) return
+        failed = true
+        if (out.closed) return reject(e)
+        out.once('close', () => reject(e))
+        out.destroy()
+      }
       stream.on('data', (c) => {
         size += c.length
         if (size > limit) { stream.unpipe(out); stream.resume(); fail(Object.assign(new Error('video too large'), { status: 413 })) }

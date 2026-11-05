@@ -79,11 +79,12 @@ function buildSchema () {
       drive: {
         type: 'object',
         title: 'Google Drive',
+        description: 'Defaults only. Drive is normally set up from the Timelapse panel in Freeboard or KIP, and settings changed there take precedence.',
         properties: {
           enabled: { type: 'boolean', title: 'Upload to Google Drive', default: false },
           folderName: { type: 'string', title: 'Drive folder', default: 'Signal K Timelapse' },
-          clientId: { type: 'string', title: 'OAuth client ID', description: 'Google Cloud OAuth client of type "TVs and Limited Input devices"' },
-          clientSecret: { type: 'string', title: 'OAuth client secret' }
+          clientId: { type: 'string', title: 'Own OAuth client ID (optional)', description: 'Only to use your own Google Cloud client instead of the built-in one: type "TVs and Limited Input devices".' },
+          clientSecret: { type: 'string', title: 'Own OAuth client secret (optional)' }
         }
       }
     }

@@ -9,6 +9,9 @@
  *   exists(localKey, folderRef)     -> Promise<boolean>
  *   upload({ filePath, name, mimeType, size, localKey, folderRef }) -> Promise<void>
  *   invalidate(sessionId)           -> drop cached folder refs after a 404
+ *
+ * Drive-only extras: link sharing of session folders (share()), and
+ * folderUrl() for the gallery.
  */
 
 const fs = require('fs')
@@ -35,20 +38,21 @@ function parseRetryAfter (res) {
 }
 
 class DriveTarget {
-  constructor ({ auth, fetch: fetchFn, folderCachePath, rootName, log }) {
+  constructor ({ auth, fetch: fetchFn, folderCachePath, rootName, log, share }) {
     this.auth = auth
+    this.share = share || (() => false) // anyone with the link can view session folders
     this.fetch = fetchFn || globalThis.fetch
     this.folderCachePath = folderCachePath
     this.rootName = rootName || 'Signal K Timelapse'
     this.log = log || { debug () {}, error () {} }
-    this.cache = { roots: {}, sessions: {} }
+    this.cache = { roots: {}, sessions: {}, shared: {} }
     this.inflight = new Map() // key -> Promise<id>, so parallel workers share one lookup/create
   }
 
   async init () {
     try {
       const c = JSON.parse(await fsp.readFile(this.folderCachePath, 'utf8'))
-      this.cache = { roots: c.roots || {}, sessions: c.sessions || {} }
+      this.cache = { roots: c.roots || {}, sessions: c.sessions || {}, shared: c.shared || {} }
     } catch (e) { /* first run */ }
   }
 
@@ -137,13 +141,85 @@ class DriveTarget {
     const rootId = await this.ensureRoot()
     const key = `${rootId}/${sessionId}`
     const cached = this.cache.sessions[key]
-    if (cached) return cached
-    return this.once('session:' + key, async () => {
+    if (cached) { await this.syncShare(cached); return cached }
+    const id = await this.once('session:' + key, async () => {
       const id = (await this.findFolder(sessionId, rootId)) || (await this.createFolder(sessionId, rootId))
       this.cache.sessions[key] = id
       await this.saveCache()
       return id
     })
+    await this.syncShare(id)
+    return id
+  }
+
+  // ---------- link sharing ----------
+
+  /**
+   * Make one session folder's link sharing match share(). Files inside
+   * inherit it. A refusal (say, a Workspace domain that forbids link
+   * sharing) is logged and not retried until the setting changes; it never
+   * stops uploads.
+   */
+  async syncShare (folderId) {
+    const want = !!this.share()
+    const have = this.cache.shared[folderId]
+    if (want === !!have || (have === 'refused' && want)) return
+    return this.once('share:' + folderId, async () => {
+      try {
+        if (want) {
+          await this.request(`${API}/files/${encodeURIComponent(folderId)}/permissions?fields=id`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ type: 'anyone', role: 'reader', allowFileDiscovery: false })
+          })
+          this.cache.shared[folderId] = true
+        } else {
+          try {
+            await this.request(`${API}/files/${encodeURIComponent(folderId)}/permissions/anyoneWithLink`, { method: 'DELETE' })
+          } catch (e) {
+            if (!(e instanceof HttpError && e.status === 404)) throw e // already private
+          }
+          delete this.cache.shared[folderId]
+        }
+      } catch (e) {
+        if (!(e instanceof HttpError)) throw e
+        this.log.error(`link sharing for folder ${folderId}: ${e.message}`)
+        if (want) this.cache.shared[folderId] = 'refused'
+        else delete this.cache.shared[folderId]
+      }
+      await this.saveCache()
+    })
+  }
+
+  /** Apply the sharing setting to every session folder we know of. Cheap when nothing changed. */
+  async syncAllSharing () {
+    const rootId = this.cache.roots[this.rootName]
+    if (!rootId) return
+    const prefix = rootId + '/'
+    const want = !!this.share()
+    for (const [key, id] of Object.entries(this.cache.sessions)) {
+      if (!key.startsWith(prefix)) continue
+      const have = this.cache.shared[id]
+      if (want ? !have : have) await this.syncShare(id)
+    }
+  }
+
+  /** Forget 'refused' marks so a changed setting is tried again. */
+  resetShareRefusals () {
+    for (const [id, v] of Object.entries(this.cache.shared)) if (v === 'refused') delete this.cache.shared[id]
+  }
+
+  /** Drive web link to a session's folder, if we have created it. */
+  folderUrl (sessionId) {
+    const rootId = this.cache.roots[this.rootName]
+    const id = rootId && this.cache.sessions[`${rootId}/${sessionId}`]
+    return id ? `https://drive.google.com/drive/folders/${id}` : null
+  }
+
+  isShared (sessionId) {
+    const rootId = this.cache.roots[this.rootName]
+    const id = rootId && this.cache.sessions[`${rootId}/${sessionId}`]
+    return !!(id && this.cache.shared[id] === true)
   }
 
   /** Forget cached folder ids (e.g. the user deleted the folder in Drive). */
