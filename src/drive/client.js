@@ -10,6 +10,6 @@
  * "Use my own Google credentials" in the panel.
  */
 module.exports = {
-  clientId: '',
-  clientSecret: ''
+  clientId: '331036943648-744duvflgr2k6r55vhom8djn9u5o0726.apps.googleusercontent.com',
+  clientSecret: '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'
 }
