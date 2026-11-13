@@ -193,7 +193,19 @@ Installs that had a client ID and secret in the plugin config keep using them un
 
 ### For the maintainer: the built-in client
 
-The built-in client lives in `src/drive/client.js`. It is created exactly like the steps above, from a personal (not work) Google account, with no billing account attached. Google treats device-flow clients as public (such apps "cannot keep secrets confidential"), but GitHub push protection flags a Google client secret, so filling it in is a deliberate choice: allow it in the repository's secret scanning settings, or write the file in a publish step so it reaches the npm package without being committed. Notes:
+The built-in client is created exactly like the steps above, from a personal (not work) Google account, with no billing account attached. Its ID and secret are never committed: `src/drive/client.js` is empty in git, and the publish workflow (`.github/workflows/publish.yml`) writes it with `scripts/write-client.js` just before `npm publish`. Google treats device-flow clients as public (such apps "cannot keep secrets confidential"), so the secret in the npm package is expected; keeping it out of git stops GitHub secret scanning from flagging it and reporting it to Google. A build from the repository has no built-in client and requires **Advanced**.
+
+Publishing uses npm trusted publishing (OIDC), so no npm token is stored anywhere. One-time setup:
+
+1. **First publish by hand.** npm can only trust a workflow for a package that already exists. From a checkout of the release commit: `GOOGLE_CLIENT_ID=… GOOGLE_CLIENT_SECRET=… node scripts/write-client.js && npm publish --access public && git checkout src/drive/client.js`. The last step matters: it puts the empty file back so the secret is never committed.
+2. **Trust the workflow.** On npmjs.com, package **Settings → Trusted publishing → GitHub Actions**: owner `zackphillips`, repository `signalk-tablet-camera-timelapse`, workflow `publish.yml`, environment `npm`. Then set **Publishing access** to require 2FA and disallow tokens.
+3. **Google secrets.** In GitHub, **Settings → Environments → New environment** `npm`, add `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`, and limit deployment tags to `v*`.
+
+After that, to release: bump `version` in `package.json`, then push a matching tag (`git tag v0.3.0 && git push origin v0.3.0`). The workflow fails if the tag and version differ or if either Google secret is missing.
+
+To rotate the secret, add a second one to the same client in Cloud Console, update `GOOGLE_CLIENT_SECRET`, publish, and disable the old one once your installs run the new version. Keeping the client ID means stored sign-ins stay valid; installs still on an older package fail to refresh once the old secret is disabled.
+
+Notes:
 
 - Google deletes OAuth clients unused for six months. Every upload pass from any install counts as use.
 - The consent screen shows the project's app name and support email, so use an email alias.

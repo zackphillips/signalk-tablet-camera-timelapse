@@ -4,12 +4,15 @@
  * The built-in Google OAuth client ("TVs and Limited Input devices"), so
  * connecting Drive is just Connect + approve, with no Google Cloud setup.
  *
- * Google treats installed/device-flow clients as public: the secret is not
- * confidential and ships in the code by design. The client can only reach
- * files this plugin created (drive.file). Leave both empty to require
- * "Use my own Google credentials" in the panel.
+ * Empty in git on purpose. The publish workflow (.github/workflows/publish.yml)
+ * writes the real values with scripts/write-client.js just before npm publish,
+ * so they reach the npm package without being committed. Google treats
+ * device-flow clients as public, but GitHub secret scanning flags the secret.
+ *
+ * With both empty (a build from the repository), the panel requires
+ * "Use my own Google Cloud client".
  */
 module.exports = {
-  clientId: '331036943648-744duvflgr2k6r55vhom8djn9u5o0726.apps.googleusercontent.com',
-  clientSecret: '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'
+  clientId: '',
+  clientSecret: ''
 }
