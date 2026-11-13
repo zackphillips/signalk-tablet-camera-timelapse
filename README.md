@@ -193,7 +193,13 @@ Installs that had a client ID and secret in the plugin config keep using them un
 
 ### For the maintainer: the built-in client
 
-The built-in client lives in `src/drive/client.js`. It is created exactly like the steps above, from a personal (not work) Google account, with no billing account attached. Google treats device-flow clients as public (such apps "cannot keep secrets confidential"), but GitHub push protection flags a Google client secret, so filling it in is a deliberate choice: allow it in the repository's secret scanning settings, or write the file in a publish step so it reaches the npm package without being committed. Notes:
+The built-in client is created exactly like the steps above, from a personal (not work) Google account, with no billing account attached. Its ID and secret are never committed: `src/drive/client.js` is empty in git, and the publish workflow (`.github/workflows/publish.yml`) writes it with `scripts/write-client.js` just before `npm publish`. Google treats device-flow clients as public (such apps "cannot keep secrets confidential"), so the secret in the npm package is expected; keeping it out of git stops GitHub secret scanning from flagging it and reporting it to Google. A build from the repository has no built-in client and requires **Advanced**.
+
+To release, add `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` and `NPM_TOKEN` as secrets of the `npm` environment (**Settings → Environments**), bump `version` in `package.json`, then push a matching tag (`git tag v0.3.0 && git push origin v0.3.0`). The workflow fails if the tag and version differ or if either Google secret is missing.
+
+To rotate the secret, add a second one to the same client in Cloud Console, update `GOOGLE_CLIENT_SECRET`, publish, and disable the old one once your installs run the new version. Keeping the client ID means stored sign-ins stay valid; installs still on an older package fail to refresh once the old secret is disabled.
+
+Notes:
 
 - Google deletes OAuth clients unused for six months. Every upload pass from any install counts as use.
 - The consent screen shows the project's app name and support email, so use an email alias.

@@ -34,7 +34,7 @@
   ],
   "scripts": {
     "test": "node --test test/*.test.js",
-    "lint": "node --check index.js && for f in src/*.js src/drive/*.js public/js/auto.js; do node --check $f || exit 1; done && for f in public/js/core/*.js public/js/hosts/*.js; do node --input-type=module --check < $f || { echo \"syntax error in $f\"; exit 1; }; done"
+    "lint": "node --check index.js && for f in src/*.js src/drive/*.js scripts/*.js public/js/auto.js; do node --check $f || exit 1; done && for f in public/js/core/*.js public/js/hosts/*.js; do node --input-type=module --check < $f || { echo \"syntax error in $f\"; exit 1; }; done"
   },
   "engines": {
     "node": ">=18.15"
