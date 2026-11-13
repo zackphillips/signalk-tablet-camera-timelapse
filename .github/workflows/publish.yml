@@ -5,7 +5,7 @@ on:
 
 permissions:
   contents: read
-  id-token: write # npm provenance
+  id-token: write # npm trusted publishing (OIDC) and provenance
 
 jobs:
   publish:
@@ -17,6 +17,8 @@ jobs:
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
+      # Trusted publishing needs npm >= 11.5.1; Node 22 ships npm 10.
+      - run: npm install -g npm@^11.5.1
       - run: npm ci
       - run: npm run lint
       - run: npm test
@@ -31,6 +33,5 @@ jobs:
         run: |
           node -e "const c=require('./src/drive/client'); if(!c.clientId||!c.clientSecret) process.exit(1)"
           npm pack --dry-run 2>&1 | grep -q 'src/drive/client.js'
+      # No token: npm trusts this repo + workflow file (configured on npmjs.com).
       - run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
